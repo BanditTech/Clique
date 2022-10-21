@@ -1,3 +1,3 @@
-# Addon Name
+# Clique
 
-This is the repository for <Addon Name>. Modified for Ascension.gg. 
+This is the repository for Clique. Modified for Ascension.gg. 
