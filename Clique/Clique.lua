@@ -104,7 +104,7 @@ function Clique:Enable()
 	-- Change to correct profile based on talent spec
 	if self.db.char.switchSpec then
 		self.silentProfile = true
-		self.talentGroup = CA_GetActiveSpecId() + 1
+		self.talentGroup = SpecializationUtil.GetActiveSpecialization()
 		if self.db.char["spec" .. self.talentGroup .. "Profile"] then
 			self.db:SetProfile(self.db.char["spec" .. self.talentGroup .. "Profile"])
 		end
