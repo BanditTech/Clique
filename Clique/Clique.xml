@@ -483,28 +483,6 @@
                             </ScrollFrame>
                         </Frames>
                     </Button>
-                    <Button name="$parentButtonSave" parentKey="button_save" inherits="MagicButtonTemplate">
-                        <Size x="80" y="22"/>
-                        <Anchors>
-                            <Anchor point="BOTTOMLEFT" relativeTo="CliqueConfig"/>
-                        </Anchors>
-                        <Scripts>
-                            <OnClick>
-                                CliqueConfig:Button_OnClick(self)
-                            </OnClick>
-                        </Scripts>
-                    </Button>
-                    <Button name="$parentButtonCancel" parentKey="button_cancel" inherits="MagicButtonTemplate">
-                        <Size x="80" y="22"/>
-                        <Anchors>
-                            <Anchor point="BOTTOMRIGHT" relativeTo="CliqueConfig"/>
-                        </Anchors>
-                        <Scripts>
-                            <OnClick>
-                                CliqueConfig:Button_OnClick(self)
-                            </OnClick>
-                        </Scripts>
-                    </Button>
                  </Frames>
             </Frame> <!-- Page 3 - Macro Edit Page -->
 
