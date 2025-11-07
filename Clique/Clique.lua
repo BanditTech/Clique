@@ -1,887 +1,950 @@
---[[---------------------------------------------------------------------------------
-  Clique by Cladhaire <cladhaire@gmail.com>
-----------------------------------------------------------------------------------]]
+--[[-------------------------------------------------------------------
+--  Clique - Copyright 2006-2012 - James N. Whitehead II
+--
+--  This is an updated version of the original 'Clique' addon
+--  designed to work better with multi-button mice, and those players
+--  who want to be able to bind keyboard combinations to enable
+--  hover-casting on unit frames.  It's a bit of a paradigm shift from
+--  the original addon, but should make a much simpler and more
+--  powerful addon.
+--
+--    * Any keyboard combination can be set as a binding.
+--    * Any mouse combination can be set as a binding.
+--    * The only types that are allowed are spells and macros.
+--
+--  The concept of 'click-sets' has been simplified and extended
+--  so that the user can specify their own binding-sets, allowing
+--  for different bindings for different sets of frames. By default
+--  the following binding-sets are available:
+--
+--    * default - These bindings are active on all frames, unless
+--      overridden by another binding in a more specific binding-set.
+--    * ooc - These bindings will ONLY be active when the player is
+--      out of combat.
+--    * enemy - These bindings are ONLY active when the unit you are
+--      clicking on is an enemy, i.e. a unit that you can attack.
+--    * friendly - These bindings are ONLY active when the unit you are
+--      clicking on is a friendly unit, i.e. one that you can assist
+--    * hovercast - These bindings will be available whenever you are over
+--      a unit frame, or a unit in the 3D world.
+--    * global - These bindings will be always available. They
+--      do not specify a target for the action, so if the action requires
+--      a target, you must specify it after performing the binding.
+--
+--  The binding-sets layer on each other, with the 'default' binding-set
+--  being at the bottom, and any other binding-set being layered on top.
+--  Clique will detect any conflicts that you have other than with
+--  default bindings, and will warn you of the situation.
+-------------------------------------------------------------------]] --
+local addonName, addon = ...
+local L = addon.L
 
-Clique = {
-	Locals = {},
-}
+function addon:Initialize()
+	-- Create an AceDB, but it needs to be cleared first
+	self.db = LibStub("AceDB-3.0"):New("CliqueDB3", self.defaults)
+	self.db.RegisterCallback(self, "OnNewProfile", "OnNewProfile")
+	self.db.RegisterCallback(self, "OnProfileChanged", "OnProfileChanged")
 
-assert(DongleStub, string.format("Clique requires DongleStub."))
-DongleStub("Dongle-1.2"):New("Clique", Clique)
-Clique.version = GetAddOnMetadata("Clique", "Version")
-if Clique.version == "wowi:revision" then
-	Clique.version = "SVN"
+	self.settings = self.db.char
+	self.bindings = self.db.profile.bindings
+
+	self.ccframes = {}
+	self.hccframes = {}
+
+	-- Registration for group headers (in-combat safe)
+	self.header = CreateFrame("Frame", addonName .. "HeaderFrame", UIParent, "SecureHandlerBaseTemplate,SecureHandlerAttributeTemplate")
+	ClickCastHeader = addon.header
+
+	-- This snippet will clear any dangling bindings that might have occurred
+	-- as a result of frames being shown/hidden.
+	self.header:SetAttribute("_onattributechanged", [[
+        if name == "state-hasunit" then
+            if value == "false" and danglingButton then
+                control:RunFor(danglingButton, self:GetAttribute("setup_onleave"))
+                danglingButton = nil
+            end
+        end
+    ]])
+	RegisterStateDriver(self.header, "hasunit", "[@mouseover, exists] true; false")
+
+	-- Create a secure action button that's sole purpose is to cancel a
+	-- pending spellcast (the targeting hand)
+	self.stopbutton = CreateFrame("Button", addonName .. "StopButton", nil, "SecureActionButtonTemplate")
+	self.stopbutton.name = self.stopbutton:GetName()
+	self.stopbutton:SetAttribute("type", "stop")
+
+	-- Create a secure action button that can be used for 'hovercast' and 'global'
+	self.globutton = CreateFrame("Button", addonName .. "SABButton", UIParent, "SecureActionButtonTemplate, SecureHandlerBaseTemplate")
+
+	-- Create a table within the addon header to store the frames
+	-- that are registered for click-casting
+	self.header:Execute([[
+        ccframes = table.new()
+    ]])
+
+	-- Create a table within the addon header to store the frame blacklist
+	self.header:Execute([[
+        blacklist = table.new()
+    ]])
+
+	-- This snippet is executed from the SecureHandlerEnterLeaveTemplate
+	-- _onenter and _onleave attributes. The 'self' attribute will contain
+	-- the unit frame itself.
+	self.header:SetAttribute("clickcast_onenter", [===[
+        local header = self:GetParent():GetFrameRef("clickcast_header")
+        header:RunFor(self, header:GetAttribute("setup_onenter"))
+    ]===])
+
+	-- This snippet is executed from the SecureHandlerEnterLeaveTemplate
+	-- _onenter and _onleave attributes. The 'self' attribute will contain
+	-- the unit frame itself.
+	self.header:SetAttribute("clickcast_onleave", [===[
+        local header = self:GetParent():GetFrameRef("clickcast_header")
+        header:RunFor(self, header:GetAttribute("setup_onleave"))
+    ]===])
+
+	local setup, remove = self:GetClickAttributes()
+	self.header:SetAttribute("setup_clicks", setup)
+	self.header:SetAttribute("remove_clicks", remove)
+
+	-- This snippet is executed from within the initialConfigFunction secure
+	-- snippet. The unit frame button is passed in the 'clickcast_button'
+	-- attribute, which can only be accomplished in a restricted environment.
+	self.header:SetAttribute("clickcast_register", [===[
+        local button = self:GetAttribute("clickcast_button")
+
+        -- Export this frame so we can display it in the insecure environment
+        self:SetAttribute("export_register", button)
+
+        button:SetAttribute("clickcast_onenter", self:GetAttribute("clickcast_onenter"))
+        button:SetAttribute("clickcast_onleave", self:GetAttribute("clickcast_onleave"))
+        ccframes[button] = true
+
+        self:RunFor(button, self:GetAttribute("setup_clicks"))
+    ]===])
+
+	-- This snippet is executed from the Clique:UnregisterFrame() function, or
+	-- possibly from some other restricted environment. The unit frame is passed
+	-- in the 'clickcast_button' attribute, which can only be accomplished
+	-- in a restricted environment.
+	self.header:SetAttribute("clickcast_unregister", [===[
+        local button = self:GetAttribute("clickcast_button")
+
+        -- Export this frame so it can be removed from the blacklist editor
+        self:SetAttribute("export_unregister", button)
+
+        -- Remove any click and binding attributes that have already been set
+        self:RunFor(button, self:GetAttribute("clickcast_onleave"))
+        self:RunFor(button, self:GetAttribute("remove_clicks"))
+
+        button:SetAttribute("clickcast_onenter", nil)
+        button:SetAttribute("clickcast_onleave", nil)
+        ccframes[button] = nil
+    ]===])
+
+	-- We need to track frame registrations so we can display secure frames in
+	-- the frame blacklist editor. This is done via the 'export_register' and
+	-- 'export_unregister' attributes.
+	self.header:HookScript("OnAttributeChanged", function(frame, name, value)
+		if name == "export_register" and type(value) ~= nil then
+			-- Convert the userdata object to the global object so we have access
+			-- to all of the correct methods, such as 'RegisterForClicks''
+			local name = value.GetName and value:GetName()
+			if name then
+				local button = _G[name]
+				self.hccframes[name] = button
+				self:UpdateRegisteredClicks(button)
+			end
+		elseif name == "export_unregister" and type(value) ~= nil then
+			local name = value.GetName and value:GetName()
+			if name then self.hccframes[name] = nil end
+		end
+	end)
+
+	local set, clr = self:GetBindingAttributes()
+	self.header:SetAttribute("setup_onenter", set)
+	self.header:SetAttribute("setup_onleave", clr)
+
+	-- Get the override binding attributes for the global click frame
+	self.globutton.setup, self.globutton.remove = self:GetClickAttributes(true)
+	self.globutton.setbinds, self.globutton.clearbinds = self:GetBindingAttributes(true)
+
+	self:IntegrateBlizzardFrames()
+
+	self:RegisterEvent("PLAYER_ENTERING_WORLD", "PlayerEnteringWorld")
 end
 
-local L = Clique.Locals
+-- These tables are a queue for frame registration/unregistration
+addon.regqueue = {}
+addon.unregqueue = {}
+addon.regclickqueue = {}
 
-function Clique:Enable()
-	-- Grab the localisation header
-	L = Clique.Locals
-	self.ooc = {}
+-- These function may be called during combat. When that is the case, the
+-- request must be queued until combat ends, and then we can attempt to
+-- register those frames. This is mainly due to integration with the
+-- Blizzard raid frames, which we cannot 'register' while in combat.
+function addon:RegisterFrame(button)
+	if InCombatLockdown() then
+		table.insert(self.regqueue, button)
+		return
+	end
 
-	self.defaults = {
-		profile = {
-			clicksets = {
-				[L.CLICKSET_DEFAULT] = {},
-				[L.CLICKSET_HARMFUL] = {},
-				[L.CLICKSET_HELPFUL] = {},
-				[L.CLICKSET_OOC] = {}
-			},
-			blacklist = {},
-			tooltips = false
-		},
-		char = {
-			switchSpec = false,
-			downClick = false
-		},
-		frames = {
-			PlayerFrame,
-			PetFrame,
-			PartyMemberFrame1,
-			PartyMemberFrame2,
-			PartyMemberFrame3,
-			PartyMemberFrame4,
-			PartyMemberFrame1PetFrame,
-			PartyMemberFrame2PetFrame,
-			PartyMemberFrame3PetFrame,
-			PartyMemberFrame4PetFrame,
-			TargetFrame,
-			TargetFrameToT,
-			FocusFrame,
-			FocusFrameToT,
-			Boss1TargetFrame,
-			Boss2TargetFrame,
-			Boss3TargetFrame,
-			Boss4TargetFrame,
-		}
+	if self.ccframes[button] ~= nil then return end
+
+	self.ccframes[button] = true
+
+	self:UpdateRegisteredClicks(button)
+
+	-- Wrap the OnEnter/OnLeave scripts in order to handle keybindings
+	addon.header:WrapScript(button, "OnEnter", addon.header:GetAttribute("setup_onenter"))
+	addon.header:WrapScript(button, "OnLeave", addon.header:GetAttribute("setup_onleave"))
+
+	-- Set the attributes on the frame
+	self.header:SetFrameRef("cliquesetup_button", button)
+	self.header:Execute(self.header:GetAttribute("setup_clicks"), button)
+end
+
+function addon:UnregisterFrame(button)
+	if InCombatLockdown() then
+		table.insert(self.unregqueue, button)
+		return
+	end
+
+	if self.ccframes[button] ~= nil then
+		-- Clear any click/bind attributes
+		self.header:SetFrameRef("cliquesetup_button", button)
+		self.header:Execute([[
+            local button = self:GetFrameRef("cliquesetup_button")
+            self:RunFor(button, self:GetAttribute("setup_onleave"))
+            self:RunAttribute("remove_clicks")
+        ]])
+
+		self.ccframes[button] = nil
+
+		-- Unwrap the OnEnter/OnLeave scripts, if they were set
+		addon.header:UnwrapScript(button, "OnEnter")
+		addon.header:UnwrapScript(button, "OnLeave")
+	end
+end
+
+function addon:Enable()
+	-- Make the options window a pushable panel window
+	UIPanelWindows["CliqueConfig"] = {
+		area = "left",
+		pushable = 1,
+		whileDead = 1
 	}
 
-	self.db = self:InitializeDB("CliqueDB", self.defaults)
-	self.profile = self.db.profile
-	self.clicksets = self.profile.clicksets
+	-- Set the tooltip for the spellbook tab
+	CliqueSpellTab.tooltip = L["Clique binding configuration"]
+end
 
-	self.editSet = self.clicksets[L.CLICKSET_DEFAULT]
+-- A new profile is being created in the db, called 'profile'
+function addon:OnNewProfile(event, db, profile)
+	table.insert(db.profile.bindings, {
+		key = "BUTTON1",
+		type = "target",
+		unit = "mouseover",
+		sets = {
+			default = true
+		}
+	})
+	table.insert(db.profile.bindings, {
+		key = "BUTTON2",
+		type = "menu",
+		sets = {
+			default = true
+		}
+	})
+	self.bindings = db.profile.bindings
+end
 
-	ClickCastFrames = ClickCastFrames or {}
-	self.ccframes = ClickCastFrames
+function addon:OnProfileChanged(event, db, newProfile)
+	self.bindings = db.profile.bindings
+	self:FireMessage("BINDINGS_CHANGED")
+end
 
-	local newindex = function(t, k, v)
-		if v == nil then
-			Clique:UnregisterFrame(k)
-			rawset(self.ccframes, k, nil)
-		else
-			Clique:RegisterFrame(k)
-			rawset(self.ccframes, k, v)
+local function ATTR(indent, prefix, attr, suffix, value)
+	local fmt = [[%sbutton:SetAttribute("%s%s%s%s%s", %q)]]
+	return fmt:format(indent, prefix, #prefix > 0 and "-" or "", attr, tonumber(suffix) and "" or "-", suffix, value)
+end
+
+local function REMATTR(prefix, attr, suffix, value)
+	local fmt = [[button:SetAttribute("%s%s%s%s%s", nil)]]
+	return fmt:format(prefix, #prefix > 0 and "-" or "", attr, tonumber(suffix) and "" or "-", suffix)
+end
+
+-- A sort function that determines in what order bindings should be applied.
+-- This function should be treated with care, it can drastically change behavior
+local function ApplicationOrder(a, b)
+	local acnt, bcnt = 0, 0
+	for k, v in pairs(a.sets) do acnt = acnt + 1 end
+	for k, v in pairs(b.sets) do bcnt = bcnt + 1 end
+
+	-- Force out-of-combat clicks to take the HIGHEST priority
+	if a.sets.ooc and not b.sets.ooc then
+		return true
+	elseif b.sets.ooc and not a.sets.ooc then
+		return false
+	elseif a.sets.ooc and b.sets.ooc then
+		return acnt < bcnt
+	end
+
+	-- Try to give any 'default' clicks LOWEST priority
+	if a.sets.default and not b.sets.default then
+		return true
+	elseif a.sets.default and b.sets.default then
+		return acnt < bcnt
+	end
+end
+
+local function shouldApply(global, entry)
+	-- If this is the global button and this is a 'global' binding
+	if global and (entry.sets.hovercast or entry.sets.global) then
+		return true
+	elseif not global then
+		-- Check to see if there's a non-global binding to be set
+		for k, v in pairs(entry.sets) do if k ~= "global" and k ~= "hovercast" then return true end end
+		return false
+	end
+end
+
+local function EntryIsCorrectSpec(entry)
+	local currentSpec = addon.talentGroup
+	if (entry.sets.pritalent and currentSpec ~= 1) or (entry.sets.sectalent and currentSpec ~= 2) then return false end
+	return true
+end
+
+-- This function takes a single argument indicating if the attributes being
+-- computed are for the special 'global' button used by Clique.  It then
+-- computes the set of attributes necessary for the player's bindings to be
+-- active on all the appropriate frames. The logic here is quite delicate but
+-- also rather well commented.
+
+function addon:GetClickAttributes(global)
+	-- In these scripts, 'self' should always be the header
+	local bits = {"local inCombat = self:GetAttribute('inCombat')", "local setupbutton = self:GetFrameRef('cliquesetup_button')", "local button = setupbutton or self"}
+
+	local rembits = {"local inCombat = self:GetAttribute('inCombat')", "local setupbutton = self:GetFrameRef('cliquesetup_button')", "local button = setupbutton or self"}
+
+	-- Check to see if the frame being setup is blacklisted. Do not perform
+	-- this check on the global frame.
+	if not global then
+		bits[#bits + 1] = "local name = button:GetName()"
+		bits[#bits + 1] = "if blacklist[name] then return end"
+
+		rembits[#rembits + 1] = "local name = button:GetName()"
+		rembits[#rembits + 1] = "if blacklist[name] then return end"
+	end
+
+	-- Sort the bindings so they are applied in order. This sort ensures that
+	-- any 'ooc' bindings are applied first.
+	table.sort(self.bindings, ApplicationOrder)
+
+	-- Build a small table of ooc keys that are 'taken' so we can check for
+	-- masking conflicts with the friend/enemy sets.
+	local oocKeys = {}
+	for idx, entry in ipairs(self.bindings) do if shouldApply(global, entry) and entry.sets.ooc and entry.key then oocKeys[entry.key] = true end end
+
+	for idx, entry in ipairs(self.bindings) do
+		-- Global (i.e. 'hovercast' and 'global') bindings are only applied
+		-- on the global frame, and not on any others. Additionally, any
+		-- non-global bindings are only applied on non-global frames. handle
+		-- this logic here.
+
+		if entry.key and shouldApply(global, entry) and EntryIsCorrectSpec(entry) then
+			-- Check to see if this is a 'friend' or an 'enemy' binding, and
+			-- check if it would mask an 'ooc' binding with the same key. If
+			-- so, we need to add code that prevents this from happening, by
+			-- stopping the friend/enemy binding from being applied when the
+			-- player is out of combat.
+
+			local indent = ""
+			local oocmask = oocKeys[entry.key]
+
+			-- This code needs to set/clear a binding depending on combat
+			-- state. We do both in this function to ensure that we don't have
+			-- to run remove_clicks every single time the combat status
+			-- changes.
+
+			local startbits
+			if oocmask and not entry.sets.ooc then
+				-- This means that the binding will mask the 'ooc' binding
+				-- with the same key, so we must ensure this is only set when
+				-- we are in combat.
+				bits[#bits + 1] = "if inCombat then      -- non-ooc that is masking"
+				indent = indent .. "  "
+			elseif entry.sets.ooc then
+				-- This is a standard 'ooc' binding, so we want to ensure its
+				-- only applied when out of combat, and cleared otherwise.
+				bits[#bits + 1] = "if not inCombat then  -- ooc binding"
+				indent = indent .. "  "
+				startbits = #rembits + 1
+			end
+
+			local prefix, suffix = addon:GetBindingPrefixSuffix(entry, global)
+
+			-- Set up help/harm bindings. The button value will be either a number,
+			-- in the case of mouse buttons, otherwise it will be a string of
+			-- characters. Harmbuttons work alongside modifiers, so we need to include
+			-- then in the remapping.
+			if entry.sets.friend then
+				if global then
+					-- A modified binding that uses friend/enemy must have the unmodified
+					-- 'unit' attribute set, in order to do the friend/enemy lookup. Add
+					-- that here.
+					--
+					-- NOTE: This will not work with useOwnerUnit and usesuffix frames
+					-- such as pet frames that use the owner's parent. This is a problem
+					-- with the way the 'mouseover' unit resolves in these cases.
+					bits[#bits + 1] = ATTR(indent, prefix, "unit", suffix, "mouseover")
+					rembits[#rembits + 1] = REMATTR(prefix, "unit", suffix)
+				end
+				local newbutton = "friend" .. suffix
+				bits[#bits + 1] = ATTR(indent, prefix, "helpbutton", suffix, newbutton)
+				rembits[#rembits + 1] = REMATTR(prefix, "helpbutton", suffix)
+				suffix = newbutton
+			elseif entry.sets.enemy then
+				if global then
+					-- A modified binding that uses friend/enemy must have the unmodified
+					-- 'unit' attribute set, in order to do the friend/enemy lookup. Add
+					-- that here.
+					--
+					-- NOTE: This will not work with useOwnerUnit and usesuffix frames
+					-- such as pet frames that use the owner's parent. This is a problem
+					-- with the way the 'mouseover' unit resolves in these cases.
+					bits[#bits + 1] = ATTR(indent, prefix, "unit", suffix, "mouseover")
+					rembits[#rembits + 1] = REMATTR(prefix, "unit", suffix)
+				end
+				local newbutton = "enemy" .. suffix
+				bits[#bits + 1] = ATTR(indent, prefix, "harmbutton", suffix, newbutton)
+				rembits[#rembits + 1] = REMATTR(prefix, "harmbutton", suffix)
+				suffix = newbutton
+			end
+
+			-- When we're setting up the 'global' button, and the binding is in the
+			-- 'hovercast' binding set, we need to specify the unit on which to take
+			-- the action. In this case, that's just mouseover.
+			if global and entry.sets.hovercast then
+				bits[#bits + 1] = ATTR(indent, prefix, "unit", suffix, "mouseover")
+				rembits[#rembits + 1] = REMATTR(prefix, "unit", suffix)
+			end
+
+			-- Build any needed SetAttribute() calls
+			if entry.type == "target" or entry.type == "menu" then
+				bits[#bits + 1] = ATTR(indent, prefix, "type", suffix, entry.type)
+				rembits[#rembits + 1] = REMATTR(prefix, "type", suffix)
+			elseif entry.type == "spell" and self.settings.stopcastingfix then
+				-- Implementation of the 'stop casting' fix
+				local macrotext
+				local spellText = addon:SpellTextWithSubName(entry)
+				if entry.sets.global then
+					-- Do not include @mouseover
+					macrotext = string.format("/click %s\n/cast %s", self.stopbutton.name, spellText)
+				else
+					macrotext = string.format("/click %s\n/cast [@mouseover] %s", self.stopbutton.name, spellText)
+				end
+				bits[#bits + 1] = ATTR(indent, prefix, "type", suffix, "macro")
+				bits[#bits + 1] = ATTR(indent, prefix, "macrotext", suffix, macrotext)
+				rembits[#rembits + 1] = REMATTR(prefix, "type", suffix)
+				rembits[#rembits + 1] = REMATTR(prefix, "macrotext", suffix)
+			elseif entry.type == "spell" then
+				local spellText = addon:SpellTextWithSubName(entry)
+				bits[#bits + 1] = ATTR(indent, prefix, "type", suffix, entry.type)
+				bits[#bits + 1] = ATTR(indent, prefix, "spell", suffix, spellText)
+				rembits[#rembits + 1] = REMATTR(prefix, "type", suffix)
+				rembits[#rembits + 1] = REMATTR(prefix, "spell", suffix)
+			elseif entry.type == "macro" and self.settings.stopcastingfix then
+				local macrotext = string.format("/click %s\n%s", self.stopbutton.name, entry.macrotext)
+				bits[#bits + 1] = ATTR(indent, prefix, "type", suffix, entry.type)
+				bits[#bits + 1] = ATTR(indent, prefix, "macrotext", suffix, macrotext)
+				rembits[#rembits + 1] = REMATTR(prefix, "type", suffix)
+				rembits[#rembits + 1] = REMATTR(prefix, "macrotext", suffix)
+			elseif entry.type == "macro" then
+				bits[#bits + 1] = ATTR(indent, prefix, "type", suffix, entry.type)
+				bits[#bits + 1] = ATTR(indent, prefix, "macrotext", suffix, entry.macrotext)
+				rembits[#rembits + 1] = REMATTR(prefix, "type", suffix)
+				rembits[#rembits + 1] = REMATTR(prefix, "macrotext", suffix)
+			else
+				error(string.format("Invalid action type: '%s'", entry.type))
+			end
+
+			-- Finish the conditional statements started above
+			if oocmask and not entry.sets.ooc then
+				-- This means that the binding will mask the 'ooc' binding
+				-- with the same key, so we must ensure this is only set when
+				-- we are in combat.
+				bits[#bits + 1] = "end"
+				indent = indent:sub(1, -3)
+			elseif entry.sets.ooc then
+				-- This is a standard 'ooc' binding, so we want to ensure its
+				-- only applied when out of combat, and cleared otherwise.
+				local endbits = #rembits
+				bits[#bits + 1] = "else                  -- clear ooc binding"
+				for i = startbits, endbits, 1 do bits[#bits + 1] = indent .. rembits[i] end
+				bits[#bits + 1] = "end"
+				indent = indent:sub(1, -3)
+			end
 		end
 	end
+
+	return table.concat(bits, "\n"), table.concat(rembits, "\n")
+end
+
+local B_SET = [[self:SetBindingClick(true, %q, self, %q);]]
+local B_CLR = [[self:ClearBinding(%q);]]
+
+-- This function takes a single argument, indicating whether the attributes
+-- should be built for the special global button or not, and returns an
+-- attribute that can set the appropriate attributes, and one that can clear
+function addon:GetBindingAttributes(global)
+	local set, clr
+
+	-- If this is not the global button, include some logic that solves issues
+	-- when the frame disappears or the frame loses focus without the OnLeave
+	-- event firing.
+	--
+	-- TODO: In the future, this should be done via OnHide or other ways as well
+
+	if global then
+		set = {}
+		clr = {}
+	else
+		set = {"local button = self", "local name = button:GetName()", "if danglingButton and control.GetAttribute then control:RunFor(danglingButton, control:GetAttribute('setup_onleave')) end",
+         "if blacklist[name] then return end", "danglingButton = button"}
+		clr = {"local button = self", "local name = button:GetName()", "if blacklist[name] then return end", "danglingButton = nil"}
+	end
+
+	-- This function is greatly simplified in that regardless of whether or
+	-- not bindings mask one another, they still need to be set as binding
+	-- clicks on the frame. Simply make a list of the keys that need to be
+	-- bound, and bind them.
+
+	local unique = {}
+
+	for idx, entry in ipairs(self.bindings) do
+		if entry.key and shouldApply(global, entry) and EntryIsCorrectSpec(entry) then
+			if global then
+				-- Allow for the re-binding of clicks and keys, except for
+				-- unmodified left/right-click
+				if entry.key ~= "BUTTON1" and entry.key ~= "BUTTON2" then
+					local prefix, suffix = addon:GetBindingPrefixSuffix(entry, global)
+					local key = self:ConvertSpecialKeys(entry)
+
+					local attr = B_SET:format(key, suffix)
+					if not unique[attr] then
+						set[#set + 1] = attr
+						clr[#clr + 1] = B_CLR:format(key)
+						unique[attr] = true
+					end
+				end
+			else
+				local buttonNum = entry.key:match("BUTTON(%d+)$")
+				if not buttonNum then
+					-- Only apply key-based binding clicks, let the raw
+					-- attributes handle the others
+					local prefix, suffix = addon:GetBindingPrefixSuffix(entry, global)
+					local key = self:ConvertSpecialKeys(entry)
+
+					local attr = B_SET:format(key, suffix)
+					if not unique[attr] then
+						set[#set + 1] = attr
+						clr[#clr + 1] = B_CLR:format(key)
+						unique[attr] = true
+					end
+				end
+			end
+		end
+	end
+
+	return table.concat(set, "\n"), table.concat(clr, "\n")
+end
+
+-- This function adds a binding to the player's current profile. The
+-- following options can be included in the click-cast entry:
+--
+-- entry = {
+--     -- The full prefix and suffix of the key being bound
+--     key = "ALT-CTRL-SHIFT-BUTTON1",
+--     -- The icon to be used for displaying this entry
+--     icon = "Interface\\Icons\\Spell_Nature_HealingTouch",
+--
+--     -- Any restricted sets that this click should be applied to
+--     sets = {"ooc", "harm", "help", "frames_blizzard"},
+--
+--     -- The type of the click-binding
+--     type = "spell",
+--     type = "macro",
+--     type = "target",
+--     type = "menu",
+--
+--     -- Any arguments for given click type
+--     spell = "Healing Touch",
+--     macrotext = "/run Nature's Swiftness\n/cast [target=mouseover] Healing Touch",
+--     unit = "mouseover",
+-- }
+
+function addon:AddBinding(entry)
+	if InCombatLockdown() then return false end
+
+	-- TODO: Check to see if the new binding conflicts with an existing binding
+	-- TODO: Validate the entry to ensure it has the correct arguments, etc.
+
+	if not entry.sets then
+		entry.sets = {
+			default = true
+		}
+	end
+
+	table.insert(self.bindings, entry)
+	self:FireMessage("BINDINGS_CHANGED")
+	return true
+end
+
+local function bindingeq(a, b)
+	assert(type(a) == "table", "Error during deletion comparison")
+	assert(type(b) == "table", "Error during deletion comparison")
+
+	if a.type ~= b.type then
+		return false
+	elseif a.type == "target" then
+		return a.key == b.key
+	elseif a.type == "menu" then
+		return a.key == b.key
+	elseif a.type == "spell" then
+		return a.spell == b.spell and a.key == b.key and a.spellSubName == b.spellSubName
+	elseif a.type == "macro" then
+		return a.macrotext == b.macrotext and a.key == b.key
+	end
+
+	return false
+end
+
+function addon:DeleteBinding(entry)
+	if InCombatLockdown() then return false end
+
+	-- Look for an entry that matches the given binding and remove it
+	for idx, bind in ipairs(self.bindings) do
+		if bindingeq(entry, bind) then
+			-- Found the entry that matches, so remove it
+			table.remove(self.bindings, idx)
+			break
+		end
+	end
+
+	self:FireMessage("BINDINGS_CHANGED")
+end
+
+function addon:ClearAttributes()
+	self.header:Execute([[
+        for button, enabled in pairs(ccframes) do
+            self:RunFor(button, self:GetAttribute("remove_clicks"))
+        end
+    ]])
+
+	for button, enabled in pairs(self.ccframes) do
+		-- Perform the setup of click bindings
+		self.header:SetFrameRef("cliquesetup_button", button)
+		self.header:Execute(self.header:GetAttribute("remove_clicks"), button)
+	end
+
+	-- Clear global attributes
+	local globutton = self.globutton
+	globutton:Execute(globutton.remove)
+	globutton:Execute(globutton.clearbinds)
+end
+
+-- Recompute all attributes, so they can later be applied.
+function addon:UpdateAttributes()
+	local setup, remove = self:GetClickAttributes()
+	self.header:SetAttribute("setup_clicks", setup)
+	self.header:SetAttribute("remove_clicks", remove)
+
+	local set, clr = self:GetBindingAttributes()
+	self.header:SetAttribute("setup_onenter", set)
+	self.header:SetAttribute("setup_onleave", clr)
+
+	local globutton = self.globutton
+	globutton.setup, globutton.remove = self:GetClickAttributes(true)
+	globutton.setbinds, globutton.clearbinds = self:GetBindingAttributes(true)
+end
+
+function addon:ApplyAttributes()
+	-- Handle all of the securely registered frames
+	self.header:Execute([[
+        for button, enabled in pairs(ccframes) do
+            self:RunFor(button, self:GetAttribute("setup_clicks"))
+        end
+    ]])
+
+	-- Now any compat frames that used the old method
+	for button, enabled in pairs(self.ccframes) do
+		-- Unwrap any existing enter/leave scripts
+		self.header:UnwrapScript(button, "OnEnter")
+		self.header:UnwrapScript(button, "OnLeave")
+		self.header:WrapScript(button, "OnEnter", addon.header:GetAttribute("setup_onenter"))
+		self.header:WrapScript(button, "OnLeave", addon.header:GetAttribute("setup_onleave"))
+
+		-- Perform the setup of click bindings
+		self.header:SetFrameRef("cliquesetup_button", button)
+		self.header:Execute(self.header:GetAttribute("setup_clicks"), button)
+	end
+
+	-- Update the global button attributes
+	self.globutton:Execute(self.globutton.setup)
+	self.globutton:Execute(self.globutton.setbinds)
+end
+
+function addon:TalentGroupChanged()
+	self.talentGroup = SpecializationUtil.GetActiveSpecialization()
+
+	if self.settings.specswap then
+		local currentProfile = self.db:GetCurrentProfile()
+		local newProfile
+
+		if self.settings["specswap" .. self.talentGroup] then newProfile = self.settings["specswap" .. self.talentGroup] end
+
+		if newProfile ~= currentProfile and type(newProfile) == "string" then self.db:SetProfile(newProfile) end
+	end
+
+	self:FireMessage("BINDINGS_CHANGED")
+end
+
+function addon:PlayerEnteringWorld()
+	-- Compatability with old Clique 1.x registrations
+	-- Iterate over the frames that were set before we arrived
+	if ClickCastFrames then for frame, options in pairs(ClickCastFrames) do self:RegisterFrame(frame, options) end end
 
 	ClickCastFrames = setmetatable({}, {
-		__newindex = newindex
+		__newindex = function(t, k, v)
+			if v == nil or v == false then
+				self:UnregisterFrame(k)
+			else
+				self:RegisterFrame(k, v)
+			end
+		end
 	})
 
-	Clique:OptionsOnLoad()
-	Clique:EnableFrames()
+	-- Register for combat events to ensure we can swap between the two states
+	self:RegisterEvent("PLAYER_REGEN_DISABLED", "EnteringCombat")
+	self:RegisterEvent("PLAYER_REGEN_ENABLED", "LeavingCombat")
 
-	-- Register for dongle events
-	self:RegisterMessage("DONGLE_PROFILE_CHANGED")
-	self:RegisterMessage("DONGLE_PROFILE_DELETED")
-	self:RegisterMessage("DONGLE_PROFILE_RESET")
+	-- Register for Clique-based messages for settings updates, etc.
+	self:RegisterMessage("BINDINGS_CHANGED")
+	self:RegisterMessage("BLACKLIST_CHANGED")
 
-	self:RegisterEvent("PLAYER_REGEN_ENABLED")
-	self:RegisterEvent("PLAYER_REGEN_DISABLED")
+	-- Handle combat watching so we can change ooc based on party combat status
+	addon:UpdateCombatWatch()
 
-	self:RegisterEvent("LEARNED_SPELL_IN_TAB")
-	self:RegisterEvent("ASCENSION_CA_SPECIALIZATION_ACTIVE_ID_CHANGED")
-	self:RegisterEvent("ADDON_LOADED")
+	-- Support mutliple talent specs on release
+	self:RegisterEvent("ASCENSION_CA_SPECIALIZATION_ACTIVE_ID_CHANGED", "TalentGroupChanged")
+	addon:TalentGroupChanged()
 
-	self:RegisterEvent("PLAYER_ENTERING_WORLD")
-	self:RegisterEvent("RAID_ROSTER_UPDATE")
-	self:RegisterEvent("PARTY_MEMBERS_CHANGED")
-	self:RegisterEvent("UNIT_PET")
-	self:RegisterEvent("CVAR_UPDATE")
+	self:FireMessage("BLACKLIST_CHANGED")
+	self:FireMessage("BINDINGS_CHANGED")
 
-	-- Change to correct profile based on talent spec
-	if self.db.char.switchSpec then
-		self.silentProfile = true
-		self.talentGroup = SpecializationUtil.GetActiveSpecialization()
-		if self.db.char["spec" .. self.talentGroup .. "Profile"] then
-			self.db:SetProfile(self.db.char["spec" .. self.talentGroup .. "Profile"])
-		end
-		self.silentProfile = false
-	end
-
-	self:UpdateClicks()
-
-	-- Register all frames that snuck in before we did =)
-	for frame in pairs(self.ccframes) do
-		self:RegisterFrame(frame)
-	end
-
-	-- Securehook CreateFrame to catch any new raid frames
-	local raidFunc = function(type, name, parent, template)
-		if template == "RaidPulloutButtonTemplate" then
-			ClickCastFrames[getglobal(name .. "ClearButton")] = true
-		end
-	end
-
-	local oldotsu = GameTooltip:GetScript("OnTooltipSetUnit")
-	if oldotsu then
-		GameTooltip:SetScript("OnTooltipSetUnit", function(...)
-			Clique:AddTooltipLines()
-			return oldotsu(...)
-		end)
-	else
-		GameTooltip:SetScript("OnTooltipSetUnit", function(...)
-			Clique:AddTooltipLines()
-		end)
-	end
-
-	hooksecurefunc("CreateFrame", raidFunc)
-
-	-- Create our slash command
-	self.cmd = self:InitializeSlashCommand("Clique commands", "CLIQUE", "clique")
-	self.cmd:RegisterSlashHandler("debug - Enables extra messages for debugging purposes", "debug", "ShowAttributes")
-	self.cmd:InjectDBCommands(self.db, "copy", "delete", "list", "reset", "set")
-	self.cmd:RegisterSlashHandler("tooltip - Enables binding lists in tooltips.", "tooltip", "ToggleTooltip")
-	self.cmd:RegisterSlashHandler("showbindings - Shows a window that contains the current bindings", "showbindings",
-	                              "ShowBindings")
-
-	-- Place the Clique tab
-	self:LEARNED_SPELL_IN_TAB()
-
-	-- Register the arena frames, if they're already loaded
-	if IsAddOnLoaded("Blizzard_ArenaUI") then
-		self:EnableArenaFrames()
-	end
+	self:UnregisterEvent("PLAYER_ENTERING_WORLD")
 end
 
-function Clique:EnableFrames()
-	local tbl = self.defaults.frames
-
-	for i, frame in pairs(tbl) do
-		rawset(self.ccframes, frame, true)
-	end
-end
-
-function Clique:SpellBookButtonPressed(frame, button)
-	local texture = getglobal(frame:GetParent():GetName() .. "IconTexture"):GetTexture()
-	local name = getglobal(frame:GetParent():GetName() .. "SpellName"):GetText()
-	local rank = getglobal(frame:GetParent():GetName() .. "SubSpellName"):GetText()
-
-	if rank == L.RACIAL_PASSIVE or rank == L.PASSIVE then
-		StaticPopup_Show("CLIQUE_PASSIVE_SKILL")
-		return
-	end
-
-	local type = "spell"
-
-	if self.editSet == self.clicksets[L.CLICKSET_HARMFUL] then
-		button = string.format("%s%d", "harmbutton", self:GetButtonNumber(button))
-	elseif self.editSet == self.clicksets[L.CLICKSET_HELPFUL] then
-		button = string.format("%s%d", "helpbutton", self:GetButtonNumber(button))
-	else
-		button = self:GetButtonNumber(button)
-	end
-
-	-- Clear the rank if "Show all spell ranks" is selected
-	if not GetCVarBool("ShowAllSpellRanks") then
-		rank = nil
-	end
-
-	-- Build the structure
-	local t = {
-		["button"] = button,
-		["modifier"] = self:GetModifierText(),
-		["texture"] = texture,
-		["type"] = type,
-		["arg1"] = name,
-		["arg2"] = rank
-	}
-
-	local key = t.modifier .. t.button
-
-	if self:CheckBinding(key) then
-		StaticPopup_Show("CLIQUE_BINDING_PROBLEM")
-		return
-	end
-
-	self.editSet[key] = t
-	self:ListScrollUpdate()
-	self:UpdateClicks()
-	-- We can only make changes when out of combat
-	self:PLAYER_REGEN_ENABLED()
-end
-
--- Player is LEAVING combat
-function Clique:PLAYER_REGEN_ENABLED()
-	self:ApplyClickSet(L.CLICKSET_DEFAULT)
-	self:RemoveClickSet(L.CLICKSET_HARMFUL)
-	self:RemoveClickSet(L.CLICKSET_HELPFUL)
-	self:ApplyClickSet(self.ooc)
-end
-
--- Player is ENTERING combat
-function Clique:PLAYER_REGEN_DISABLED()
-	self:RemoveClickSet(self.ooc)
-	self:ApplyClickSet(L.CLICKSET_DEFAULT)
-	self:ApplyClickSet(L.CLICKSET_HARMFUL)
-	self:ApplyClickSet(L.CLICKSET_HELPFUL)
-end
-
-function Clique:UpdateClicks()
-	local ooc = self.clicksets[L.CLICKSET_OOC]
-	local harm = self.clicksets[L.CLICKSET_HARMFUL]
-	local help = self.clicksets[L.CLICKSET_HELPFUL]
-
-	-- Since harm/help buttons take priority over any others, we can't
-	--
-	-- just apply the OOC set last.  Instead we use the self.ooc pseudo
-	-- set (which we build here) which contains only those help/harm
-	-- buttons that don't conflict with those defined in OOC.
-
-	self.ooc = table.wipe(self.ooc or {})
-
-	-- Create a hash map of the "taken" combinations
-	local takenBinds = {}
-
-	for name, entry in pairs(ooc) do
-		local key = string.format("%s:%s", entry.modifier, entry.button)
-		takenBinds[key] = true
-		table.insert(self.ooc, entry)
-	end
-
-	for name, entry in pairs(harm) do
-		local button = string.gsub(entry.button, "harmbutton", "")
-		local key = string.format("%s:%s", entry.modifier, button)
-		if not takenBinds[key] then
-			table.insert(self.ooc, entry)
-		end
-	end
-
-	for name, entry in pairs(help) do
-		local button = string.gsub(entry.button, "helpbutton", "")
-		local key = string.format("%s:%s", entry.modifier, button)
-		if not takenBinds[key] then
-			table.insert(self.ooc, entry)
-		end
-	end
-
-	self:UpdateTooltip()
-end
-
-function Clique:RegisterFrame(frame)
-	local name = frame:GetName()
-
-	if self.profile.blacklist[name] then
-		rawset(self.ccframes, frame, false)
-		return
-	end
-
-	if not ClickCastFrames[frame] then
-		rawset(self.ccframes, frame, true)
-		if CliqueTextListFrame then
-			Clique:TextListScrollUpdate()
-		end
-	end
-
-	-- Register AnyUp or AnyDown on this frame, depending on configuration
-	self:SetClickType(frame)
-
-	if frame:CanChangeAttribute() or frame:CanChangeProtectedState() then
-		if InCombatLockdown() then
-			self:ApplyClickSet(L.CLICKSET_DEFAULT, frame)
-			self:ApplyClickSet(L.CLICKSET_HELPFUL, frame)
-			self:ApplyClickSet(L.CLICKSET_HARMFUL, frame)
-		else
-			self:ApplyClickSet(L.CLICKSET_DEFAULT, frame)
-			self:ApplyClickSet(self.ooc, frame)
-		end
-	end
-end
-
-function Clique:ApplyClickSet(name, frame)
-	local set = self.clicksets[name] or name
-
-	if frame then
-		for modifier, entry in pairs(set) do
-			self:SetAttribute(entry, frame)
+function addon:UpdateCombatWatch()
+	if self.settings.fastooc then
+		if not self.registeredUnitFlags then
+			self:RegisterEvent("UNIT_FLAGS", "CheckPartyCombat")
+			self.registeredUnitFlags = true
 		end
 	else
-		for modifier, entry in pairs(set) do
-			self:SetAction(entry)
-		end
+		self:UnregisterEvent("UNIT_FLAGS")
+		self.registeredUnitFlags = false
 	end
 end
 
-function Clique:RemoveClickSet(name, frame)
-	local set = self.clicksets[name] or name
+function addon:UpdateBlacklist()
+	local bits = {"blacklist = table.wipe(blacklist)"}
 
-	if frame then
-		for modifier, entry in pairs(set) do
-			self:DeleteAttribute(entry, frame)
-		end
-	else
-		for modifier, entry in pairs(set) do
-			self:DeleteAction(entry)
-		end
+	for frame, value in pairs(self.settings.blacklist) do if not not value then bits[#bits + 1] = string.format("blacklist[%q] = true", frame) end end
+
+	addon.header:Execute(table.concat(bits, ";\n"))
+	addon:UpdateRegisteredClicks()
+end
+
+function addon:EnteringCombat()
+	-- If there are no 'ooc' bindings, then no need to re-apply
+	if not self.has_ooc then return end
+
+	-- Check to see if we're already in combat, so we don't re-apply
+	if not self.header:GetAttribute("inCombat") then
+		-- Apply attributes, indicating we need the 'combat' set
+		self.header:SetAttribute("inCombat", true)
+		self.globutton:SetAttribute("inCombat", true)
+		addon:ApplyAttributes()
 	end
 end
 
-function Clique:UnregisterFrame(frame)
-	assert(not InCombatLockdown(), "An addon attempted to unregister a frame from Clique while in combat.")
-	for name, set in pairs(self.clicksets) do
-		for modifier, entry in pairs(set) do
-			self:DeleteAttribute(entry, frame)
-		end
+function addon:LeavingCombat()
+	-- Process any frames in the registration queue
+	for idx, button in ipairs(self.regqueue) do self:RegisterFrame(button) end
+	if next(self.regqueue) then table.wipe(self.regqueue) end
+
+	-- Process any frames in the unregistration queue
+	for idx, button in ipairs(self.unregqueue) do self:UnregisterFrame(button) end
+	if next(self.regqueue) then table.wipe(self.regqueue) end
+
+	-- Process any frames in the clickregister queue
+	for idx, button in ipairs(self.regclickqueue) do self:UpdateRegisteredClicks(button) end
+	if next(self.regclickqueue) then table.wipe(self.regclickqueue) end
+
+	-- Only apply attributes if we have an 'ooc' binding set
+	if self.has_ooc then
+		if self.partyincombat then self.partyincombat = false end
+
+		-- Clear previously set attributes
+		self:ClearAttributes()
+
+		-- Apply attributes, indicating we want the 'ooc' set
+		self.header:SetAttribute("inCombat", false)
+		self.globutton:SetAttribute("inCombat", false)
+		self:ApplyAttributes()
 	end
 end
 
-function Clique:DONGLE_PROFILE_CHANGED(event, db, parent, svname, profileKey)
-	if db == self.db then
-		if not self.silentProfile then
-			self:PrintF(L.PROFILE_CHANGED, profileKey)
-		end
-
-		for name, set in pairs(self.clicksets) do
-			self:RemoveClickSet(set)
-		end
-		self:RemoveClickSet(self.ooc)
-
-		self.profile = self.db.profile
-		self.clicksets = self.profile.clicksets
-		self.editSet = self.clicksets[L.CLICKSET_DEFAULT]
-		self.profileKey = profileKey
-
-		-- Refresh the profile editor if it exists
-		self.textlistSelected = nil
-		self:TextListScrollUpdate()
-		self:ListScrollUpdate()
-		self:UpdateClicks()
-
-		self:PLAYER_REGEN_ENABLED()
-	end
-end
-
-function Clique:DONGLE_PROFILE_RESET(event, db, parent, svname, profileKey)
-	if db == self.db then
-		for name, set in pairs(self.clicksets) do
-			self:RemoveClickSet(set)
-		end
-		self:RemoveClickSet(self.ooc)
-
-		self.profile = self.db.profile
-		self.clicksets = self.profile.clicksets
-		self.editSet = self.clicksets[L.CLICKSET_DEFAULT]
-		self.profileKey = profileKey
-
-		-- Refresh the profile editor if it exists
-		self.textlistSelected = nil
-		self:TextListScrollUpdate()
-		self:ListScrollUpdate()
-		self:UpdateClicks()
-
-		self:PLAYER_REGEN_ENABLED()
-		self:Print(L.PROFILE_RESET, profileKey)
-	end
-end
-
-function Clique:DONGLE_PROFILE_DELETED(event, db, parent, svname, profileKey)
-	if db == self.db then
-		self:PrintF(L.PROFILE_DELETED, profileKey)
-
-		self.textlistSelected = nil
-		self:TextListScrollUpdate()
-		self:ListScrollUpdate()
-	end
-end
-
-function Clique:SetAttribute(entry, frame)
-	local name = frame:GetName()
-
-	if self.profile.blacklist and self.profile.blacklist[name] then
+function addon:CheckPartyCombat(event, unit)
+	if InCombatLockdown() or not unit then return end
+	if not self.has_ooc then
+		-- No change required if no ooc bindings
 		return
 	end
 
-	-- Set up any special attributes
-	local type, button, value
-
-	if not tonumber(entry.button) then
-		type, button = select(3, string.find(entry.button, "(%a+)button(%d+)"))
-		frame:SetAttribute(entry.modifier .. entry.button, type .. button)
-		assert(frame:GetAttribute(entry.modifier .. entry.button, type .. button))
-		button = string.format("-%s%s", type, button)
-	end
-
-	button = button or entry.button
-
-	if entry.type == "actionbar" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		frame:SetAttribute(entry.modifier .. "action" .. button, entry.arg1)
-	elseif entry.type == "action" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		frame:SetAttribute(entry.modifier .. "action" .. button, entry.arg1)
-		if entry.arg2 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg2)
-		end
-	elseif entry.type == "pet" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		frame:SetAttribute(entry.modifier .. "action" .. button, entry.arg1)
-		if entry.arg2 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg2)
-		end
-	elseif entry.type == "spell" then
-		local rank = entry.arg2
-		local cast
-		if rank then
-			if tonumber(rank) then
-				-- The rank is a number (pre-2.3) so fill in the format
-				cast = L.CAST_FORMAT:format(entry.arg1, rank)
-			else
-				-- The whole rank string is saved (post-2.3) so use it
-				cast = string.format("%s(%s)", entry.arg1, rank)
-			end
-		else
-			cast = entry.arg1
-		end
-
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		frame:SetAttribute(entry.modifier .. "spell" .. button, cast)
-
-		frame:SetAttribute(entry.modifier .. "bag" .. button, entry.arg2)
-		frame:SetAttribute(entry.modifier .. "slot" .. button, entry.arg3)
-		frame:SetAttribute(entry.modifier .. "item" .. button, entry.arg4)
-		if entry.arg5 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg5)
-		end
-	elseif entry.type == "item" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		frame:SetAttribute(entry.modifier .. "bag" .. button, entry.arg1)
-		frame:SetAttribute(entry.modifier .. "slot" .. button, entry.arg2)
-		frame:SetAttribute(entry.modifier .. "item" .. button, entry.arg3)
-		if entry.arg4 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg4)
-		end
-	elseif entry.type == "macro" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		if entry.arg1 then
-			frame:SetAttribute(entry.modifier .. "macro" .. button, entry.arg1)
-		else
-			local unit = SecureButton_GetModifiedUnit(frame, entry.modifier .. "unit" .. button)
-			local macro = tostring(entry.arg2)
-			if unit and macro then
-				macro = macro:gsub("target%s*=%s*clique", "target=" .. unit)
-			end
-
-			frame:SetAttribute(entry.modifier .. "macro" .. button, nil)
-			frame:SetAttribute(entry.modifier .. "macrotext" .. button, macro)
-		end
-	elseif entry.type == "stop" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-	elseif entry.type == "target" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		if entry.arg1 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg1)
-		end
-	elseif entry.type == "focus" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		if entry.arg1 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg1)
-		end
-	elseif entry.type == "assist" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		if entry.arg1 then
-			frame:SetAttribute(entry.modifier .. "unit" .. button, entry.arg1)
-		end
-	elseif entry.type == "click" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-		frame:SetAttribute(entry.modifier .. "clickbutton" .. button, getglobal(entry.arg1))
-	elseif entry.type == "menu" then
-		frame:SetAttribute(entry.modifier .. "type" .. button, entry.type)
-	end
-end
-
-function Clique:DeleteAttribute(entry, frame)
-	local name = frame:GetName()
-	if self.profile.blacklist and self.profile.blacklist[name] then
-		return
-	end
-
-	local type, button, value
-
-	if not tonumber(entry.button) then
-		type, button = select(3, string.find(entry.button, "(%a+)button(%d+)"))
-		frame:SetAttribute(entry.modifier .. entry.button, nil)
-		button = string.format("-%s%s", type, button)
-	end
-
-	button = button or entry.button
-
-	entry.delete = true
-
-	frame:SetAttribute(entry.modifier .. "type" .. button, nil)
-	frame:SetAttribute(entry.modifier .. entry.type .. button, nil)
-end
-
-function Clique:SetAction(entry)
-	for frame, enabled in pairs(self.ccframes) do
-		if enabled then
-			self:SetAttribute(entry, frame)
-		end
-	end
-end
-
-function Clique:DeleteAction(entry)
-	for frame in pairs(self.ccframes) do
-		self:DeleteAttribute(entry, frame)
-	end
-end
-
-function Clique:ShowAttributes()
-	self:Print("Enabled enhanced debugging.")
-	PlayerFrame:SetScript("OnAttributeChanged", function(...)
-		self:Print(...)
-	end)
-	self:UnregisterFrame(PlayerFrame)
-	self:RegisterFrame(PlayerFrame)
-end
-
-local tt_ooc = {}
-local tt_help = {}
-local tt_harm = {}
-local tt_default = {}
-
-function Clique:UpdateTooltip()
-	local ooc = self.ooc
-	local default = self.clicksets[L.CLICKSET_DEFAULT]
-	local harm = self.clicksets[L.CLICKSET_HARMFUL]
-	local help = self.clicksets[L.CLICKSET_HELPFUL]
-
-	for k, v in pairs(tt_ooc) do
-		tt_ooc[k] = nil
-	end
-	for k, v in pairs(tt_help) do
-		tt_help[k] = nil
-	end
-	for k, v in pairs(tt_harm) do
-		tt_harm[k] = nil
-	end
-	for k, v in pairs(tt_default) do
-		tt_default[k] = nil
-	end
-
-	-- Build the ooc lines, which includes both helpful and harmful
-	for k, v in pairs(ooc) do
-		local button = self:GetButtonText(v.button)
-		local mod = string.format("%s%s", v.modifier or "", button)
-		local action = string.format("%s (%s)", v.arg1 or "", v.type)
-		table.insert(tt_ooc, {
-			mod = mod,
-			action = action
-		})
-	end
-
-	-- Build the default lines
-	for k, v in pairs(default) do
-		local button = self:GetButtonText(v.button)
-		local mod = string.format("%s%s", v.modifier or "", button)
-		local action = string.format("%s (%s)", v.arg1 or "", v.type)
-		table.insert(tt_default, {
-			mod = mod,
-			action = action
-		})
-	end
-
-	-- Build the harm lines
-	for k, v in pairs(harm) do
-		local button = self:GetButtonText(v.button)
-		local mod = string.format("%s%s", v.modifier or "", button)
-		local action = string.format("%s (%s)", v.arg1 or "", v.type)
-		table.insert(tt_harm, {
-			mod = mod,
-			action = action
-		})
-	end
-
-	-- Build the help lines
-	for k, v in pairs(help) do
-		local button = self:GetButtonText(v.button)
-		local mod = string.format("%s%s", v.modifier or "", button)
-		local action = string.format("%s (%s)", v.arg1 or "", v.type)
-		table.insert(tt_help, {
-			mod = mod,
-			action = action
-		})
-	end
-
-	local function sort(a, b)
-		return a.mod < b.mod
-	end
-
-	table.sort(tt_ooc, sort)
-	table.sort(tt_default, sort)
-	table.sort(tt_harm, sort)
-	table.sort(tt_help, sort)
-end
-
-function Clique:AddTooltipLines()
-	if not self.profile.tooltips then
-		return
-	end
-
-	local frame = GetMouseFocus()
-	if not frame then
-		return
-	end
-	if not self.ccframes[frame] then
-		return
-	end
-
-	-- Add a buffer line
-	GameTooltip:AddLine(" ")
-	if UnitAffectingCombat("player") then
-		if #tt_default ~= 0 then
-			GameTooltip:AddLine("Default bindings:")
-			for k, v in ipairs(tt_default) do
-				GameTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
-			end
-		end
-
-		if #tt_help ~= 0 and not UnitCanAttack("player", "mouseover") then
-			GameTooltip:AddLine("Helpful bindings:")
-			for k, v in ipairs(tt_help) do
-				GameTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
-			end
-		end
-
-		if #tt_harm ~= 0 and UnitCanAttack("player", "mouseover") then
-			GameTooltip:AddLine("Hostile bindings:")
-			for k, v in ipairs(tt_harm) do
-				GameTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
-			end
-		end
-	else
-		if #tt_ooc ~= 0 then
-			GameTooltip:AddLine("Out of combat bindings:")
-			for k, v in ipairs(tt_ooc) do
-				GameTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
+	if self.settings.fastooc then
+		if UnitInParty(unit) or UnitInRaid(unit) then
+			if UnitAffectingCombat(unit) == 1 then
+				-- Trigger pre-combat switch for fastooc
+				self.partyincombat = true
+				self.combattrigger = UnitGUID(unit)
+				self.header:SetAttribute("inCombat", true)
+				self.globutton:SetAttribute("inCombat", true)
+				addon:ApplyAttributes()
+			elseif self.partyincombat then
+				-- The unit is out of combat, so try to clear our flag
+				if self.combattrigger == UnitGUID(unit) then
+					self.partyincombat = false
+					self.header:SetAttribute("inCombat", false)
+					self.globutton:SetAttribute("inCombat", false)
+					addon:ApplyAttributes()
+				end
 			end
 		end
 	end
 end
 
-function Clique:ToggleTooltip()
-	self.profile.tooltips = not self.profile.tooltips
-	self:PrintF("Listing of bindings in tooltips has been %s", self.profile.tooltips and "Enabled" or "Disabled")
+-- This function returns whether or not a frame is blacklisted in the current
+-- users settings
+
+function addon:IsFrameBlacklisted(frame)
+	local name = frame
+	if type(frame) == "table" then name = frame.GetName and frame:GetName() end
+	return self.settings.blacklist[name]
 end
 
-function Clique:ShowBindings()
-	if not CliqueTooltip then
-		CliqueTooltip = CreateFrame("GameTooltip", "CliqueTooltip", UIParent, "GameTooltipTemplate")
-		CliqueTooltip:SetPoint("CENTER", 0, 0)
-		CliqueTooltip.close = CreateFrame("Button", nil, CliqueTooltip)
-		CliqueTooltip.close:SetHeight(32)
-		CliqueTooltip.close:SetWidth(32)
-		CliqueTooltip.close:SetPoint("TOPRIGHT", 1, 0)
-		CliqueTooltip.close:SetScript("OnClick", function()
-			CliqueTooltip:Hide()
-		end)
-		CliqueTooltip.close:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
-		CliqueTooltip.close:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
-		CliqueTooltip.close:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
-
-		CliqueTooltip:EnableMouse()
-		CliqueTooltip:SetMovable()
-		CliqueTooltip:SetPadding(16)
-		CliqueTooltip:SetBackdropBorderColor(TOOLTIP_DEFAULT_COLOR.r, TOOLTIP_DEFAULT_COLOR.g, TOOLTIP_DEFAULT_COLOR.b);
-		CliqueTooltip:SetBackdropColor(TOOLTIP_DEFAULT_BACKGROUND_COLOR.r, TOOLTIP_DEFAULT_BACKGROUND_COLOR.g,
-		                               TOOLTIP_DEFAULT_BACKGROUND_COLOR.b);
-
-		CliqueTooltip:RegisterForDrag("LeftButton")
-		CliqueTooltip:SetScript("OnDragStart", function(self)
-			self:StartMoving()
-		end)
-		CliqueTooltip:SetScript("OnDragStop", function(self)
-			self:StopMovingOrSizing()
-			ValidateFramePosition(self)
-		end)
-		CliqueTooltip:SetOwner(UIParent, "ANCHOR_PRESERVE")
+-- Update both registered clicks, and ensure that mousewheel events are enabled
+-- on the frame.
+function addon:UpdateRegisteredClicks(button)
+	if InCombatLockdown() then
+		table.insert(self.regclickqueue, button)
+		return
 	end
 
-	if not CliqueTooltip:IsShown() then
-		CliqueTooltip:SetOwner(UIParent, "ANCHOR_PRESERVE")
+	local direction = self.settings.downclick and "AnyDown" or "AnyUp"
+
+	-- Short version that only updates clicks for one frame
+	if button and not self:IsFrameBlacklisted(button) then
+		button:RegisterForClicks(direction)
+		button:EnableMouseWheel(true)
+		return
 	end
 
-	-- Actually fill it with the bindings
-	CliqueTooltip:SetText("Clique Bindings")
-
-	if #tt_default > 0 then
-		CliqueTooltip:AddLine(" ")
-		CliqueTooltip:AddLine("Default bindings:")
-		for k, v in ipairs(tt_default) do
-			CliqueTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
+	for button in pairs(self.ccframes) do
+		if not self:IsFrameBlacklisted(button) then
+			button:RegisterForClicks(direction)
+			button:EnableMouseWheel(true)
 		end
 	end
 
-	if #tt_help > 0 then
-		CliqueTooltip:AddLine(" ")
-		CliqueTooltip:AddLine("Helpful bindings:")
-		for k, v in ipairs(tt_help) do
-			CliqueTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
-		end
-	end
-
-	if #tt_harm > 0 then
-		CliqueTooltip:AddLine(" ")
-		CliqueTooltip:AddLine("Hostile bindings:")
-		for k, v in ipairs(tt_harm) do
-			CliqueTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
-		end
-	end
-
-	if #tt_ooc > 0 then
-		CliqueTooltip:AddLine(" ")
-		CliqueTooltip:AddLine("Out of combat bindings:")
-		for k, v in ipairs(tt_ooc) do
-			CliqueTooltip:AddDoubleLine(v.mod, v.action, 1, 1, 1, 1, 1, 1)
-		end
-	end
-
-	CliqueTooltip:Show()
-end
-
-function Clique:ASCENSION_CA_SPECIALIZATION_ACTIVE_ID_CHANGED(event, newGroup)
-	if self.db.char.switchSpec then
-		self:Print("Detected a talent spec change, changing profile")
-		-- self:Print("Detected "..typeName..", changing profile to "..newGroup)
-
-		if self.db.char["spec" .. newGroup .. "Profile"] then
-			self.db:SetProfile(self.db.char["spec" .. newGroup .. "Profile"])
-		end
-
-		if CliqueFrame then
-			CliqueFrame.title:SetText("Clique v. " .. Clique.version .. " - " .. tostring(Clique.db.keys.profile));
+	for name, button in pairs(self.hccframes) do
+		if not self:IsFrameBlacklisted(button) then
+			button:RegisterForClicks(direction)
+			button:EnableMouseWheel(true)
 		end
 	end
 end
 
-function Clique:SetClickType(frame)
-	local clickType = Clique.db.char.downClick and "AnyDown" or "AnyUp"
-	if frame then
-		frame:RegisterForClicks(clickType)
+-- Handler function for message indicating that a change as occurred
+-- with the configured bindings. This is the only place that the
+-- bindings should be re-computed. If this handler is called during
+-- combat than execution should be deferred until the user exits
+-- combat.
+function addon:BINDINGS_CHANGED()
+	if InCombatLockdown() then
+		self:Defer("BINDINGS_CHANGED")
+		return
+	end
+
+	-- Clear any existing attributes
+	self:ClearAttributes()
+
+	-- Very simple optimisation. If the player has no 'ooc' bindings
+	-- set, then attributes can be applied once and then only updated
+	-- when the bindings list is changed.
+	local has_ooc = false
+	for idx, entry in ipairs(self.bindings) do
+		if entry.sets.ooc then
+			has_ooc = true
+			break
+		end
+	end
+
+	self.has_ooc = has_ooc
+
+	-- Update all click/binding attributes
+	self:UpdateAttributes()
+
+	-- Update the bindings list, if open
+	CliqueConfig:UpdateList()
+
+	-- Update the actual attributes on all frames
+	self:ApplyAttributes()
+end
+
+function addon:BLACKLIST_CHANGED()
+	if InCombatLockdown() then
+		self:Defer("BLACKLIST_CHANGED")
+		return
+	end
+
+	-- Clear attributes on all frames
+	self:ClearAttributes()
+
+	-- Actually update the blacklist accordingly
+	local bits = {"blacklist = table.wipe(blacklist)"}
+
+	for frame, value in pairs(self.settings.blacklist) do if not not value then bits[#bits + 1] = string.format("blacklist[%q] = true", frame) end end
+
+	addon.header:Execute(table.concat(bits, ";\n"))
+
+	-- Update the registered clicks, to catch any unblacklisted frames
+	self:UpdateRegisteredClicks()
+
+	-- Update the options panel
+	if self.UpdateOptionsPanel then self:UpdateOptionsPanel() end
+
+	-- Update the actual attributes on all frames
+	self:ApplyAttributes()
+end
+
+SLASH_CLIQUE1 = "/clique"
+SlashCmdList["CLIQUE"] = function(msg, editbox)
+	if AscensionSpellbookFrame:IsVisible() then
+		CliqueConfig:ShowWithSpellBook()
 	else
-		for frame, enabled in pairs(self.ccframes) do
-			if enabled then
-				frame:RegisterForClicks(clickType)
-			end
-		end
+		ShowUIPanel(CliqueConfig)
 	end
 end
-
-function Clique:EnableArenaFrames()
-	local arenaFrames = {ArenaEnemyFrame1, ArenaEnemyFrame2, ArenaEnemyFrame3, ArenaEnemyFrame4, ArenaEnemyFrame5}
-
-	for idx, frame in ipairs(arenaFrames) do
-		rawset(self.ccframes, frame, true)
-	end
-end
-
-function Clique:ADDON_LOADED(event, addon)
-	if addon == "Blizzard_ArenaUI" then
-		self:EnableArenaFrames()
-	end
-end
-
--- Check whether the user is in a raid group or has raid-style party frames (CompactRaidFrames) enabled
-function Clique:IsInRaidOrHasRaidFramesEnabled()
-	return IsInRaid() or GetCVarBool("useCompactPartyFrames")
-end
-
--- Remove stale frames from `self.ccframes` that are no longer valid.
---
--- Ensures we only store the default frames and currently active raid frames.
-function Clique:CleanStaleCCFrames(frames)
-	local validFrames = {}
-
-	-- add default frames
-	for _, f in ipairs(self.defaults.frames) do
-		validFrames[f] = true
-	end
-
-	-- add provided frames (e.g. dynamic raid frames)
-	for _, f in ipairs(frames) do
-		validFrames[f] = true
-	end
-
-	-- prune stale frames that are no longer valid
-	for f in pairs(self.ccframes) do
-		if not validFrames[f] then
-			self.ccframes[f] = nil
-		end
-	end
-end
-
--- Enumerate and return currently active raid frames
---
--- NOTE: CompactRaidFrames, or rather all raid frames in general – for either a
--- player or their pets – should be defined in the following format:
--- CompactRaidFrame{index} e.g. CompactRaidFrame1.
-function Clique:GetActiveRaidFrames()
-	local frames = {}
-
-	local frame = EnumerateFrames()
-	while frame do
-		local name = frame:GetName()
-		-- include only raid frames starting with `CompactRaidFrame` and ending with
-		-- a digit while having a valid unit value (ensures the frame belongs to a
-		-- player)
-		if name and name:find("^CompactRaidFrame%d+$") and frame.unit then
-			table.insert(frames, frame)
-		end
-
-		frame = EnumerateFrames(frame)
-	end
-
-	return frames
-end
-
--- Collect currently active raid frames, prune stale ones and re-register valid
--- ones
-function Clique:EnableRaidFrames()
-	local raidFrames = self:GetActiveRaidFrames()
-	self:CleanStaleCCFrames(raidFrames)
-	for _, f in ipairs(raidFrames) do
-		self:RegisterFrame(f)
-	end
-end
-
--- Shared event handler for syncing dynamic raid/party frame changes
---
--- NOTE: CompactRaidFrames, or rather all raid frames in general, are dynamic and are added to the
--- UIParent's "frame tree" on-demand, which requires hooking into multiple
--- different events that gets fired when the party or raid group roster changes.
--- Pets or CVar -related events need special handling and thus are separated.
-local function HandleRaidFrameSync(self, event, unit)
-	if not self:IsInRaidOrHasRaidFramesEnabled() then return end
-
-	if event == "UNIT_PET" then
-		-- only refresh if the pet belongs to player/party/raid
-		if unit == "player" or unit:match("^party%d+$") or unit:match("^raid%d+$") then
-			self:EnableRaidFrames()
-		end
-	elseif event == "CVAR_UPDATE" then
-		-- sync raid frames when toggling the interface option on/off
-		if unit == "USE_RAID_STYLE_PARTY_FRAMES" then
-			self:EnableRaidFrames()
-		end
-	else
-		self:EnableRaidFrames()
-	end
-end
-
--- Bind handler to events
-Clique.PLAYER_ENTERING_WORLD = HandleRaidFrameSync
-Clique.RAID_ROSTER_UPDATE = HandleRaidFrameSync
-Clique.PARTY_MEMBERS_CHANGED = HandleRaidFrameSync
-Clique.UNIT_PET = HandleRaidFrameSync
-Clique.CVAR_UPDATE = HandleRaidFrameSync
