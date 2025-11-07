@@ -37,6 +37,7 @@ function CliqueConfig:OnShow()
 	self:UpdateProfileDisplay()
 	UIDropDownMenu_Refresh(self.page1.profileDropdown)
 	self:EnableSpellbookButtons()
+	self:UpdateBindSpellButtonState()
 	self:UpdateAlert()
 end
 
@@ -175,6 +176,18 @@ function CliqueConfig:CreatePage2Buttons()
 	self.page2.button_cancel:Show()
 end
 
+function CliqueConfig:UpdateBindSpellButtonState()
+	if not self.page1 or not self.page1.button_spell then
+		return -- Button doesn't exist yet
+	end
+
+	if AscensionSpellbookFrame:IsVisible() then
+		self.page1.button_spell:Disable()
+	else
+		self.page1.button_spell:Enable()
+	end
+end
+
 function CliqueConfig:Column_OnClick(frame, button)
 	self.page1.sortType = frame.sortType
 	self:UpdateList()
@@ -194,8 +207,14 @@ function CliqueConfig:HijackSpellbook()
 		self.spellbookButtons[idx] = button
 	end
 
-	AscensionSpellbookFrame:HookScript("OnShow", function(frame) self:EnableSpellbookButtons() end)
-	AscensionSpellbookFrame:HookScript("OnHide", function(frame) self:EnableSpellbookButtons() end)
+	AscensionSpellbookFrame:HookScript("OnShow", function(frame)
+		self:EnableSpellbookButtons()
+		self:UpdateBindSpellButtonState()
+	end)
+	AscensionSpellbookFrame:HookScript("OnHide", function(frame)
+		self:EnableSpellbookButtons()
+		self:UpdateBindSpellButtonState()
+	end)
 
 	self:EnableSpellbookButtons()
 end
