@@ -111,7 +111,7 @@ end
 
 local function make_label(name, parent, template)
 	local label = parent:CreateFontString("OVERLAY", name, template)
-	label:SetWidth(110)
+	label:SetWidth(120)
 	label:SetJustifyH("LEFT")
 	label.type = "label"
 	return label
