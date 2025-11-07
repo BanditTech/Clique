@@ -93,13 +93,7 @@ function CliqueConfig:SetupGUI()
 	self.page1.column2.sortType = "key"
 	self.page1.sortType = self.page1.column2.sortType
 
-	self.page1.button_spell:SetText(L["Bind spell"])
-	self.page1.button_other:SetText(L["Bind other"])
-	self.page1.button_options:SetText(L["Options"])
-
 	self.page2.button_binding:SetText(L["Set binding"])
-	self.page2.button_save:SetText(L["Save"])
-	self.page2.button_cancel:SetText(L["Cancel"])
 	local desc =
 		L["You can use this page to create a custom macro to be run when activating a binding on a unit. When creating this macro you should keep in mind that you will need to specify the target of any actions in the macro by using the 'mouseover' unit, which is the unit you are clicking on. For example, you can do any of the following:\n\n/cast [target=mouseover] Regrowth\n/cast [@mouseover] Regrowth\n/cast [@mouseovertarget] Taunt\n\nHover over the 'Set binding' button below and either click or press a key with any modifiers you would like included. Then edit the box below to contain the macro you would like to have run when this binding is activated."]
 
@@ -108,6 +102,9 @@ function CliqueConfig:SetupGUI()
 
 	-- Create profile UI elements programmatically
 	self:CreateProfileUI()
+
+	-- Create page 2 buttons programmatically
+	self:CreatePage2Buttons()
 
 	self.page1:Show()
 end
@@ -129,24 +126,53 @@ function CliqueConfig:CreateProfileUI()
 	UIDropDownMenu_SetWidth(self.page1.profileDropdown, 100)
 	UIDropDownMenu_Initialize(self.page1.profileDropdown, function(dropdown, level) self:ProfileDropdown_Initialize(dropdown, level) end)
 
-	-- Make sure existing buttons are properly positioned and visible
-	-- Force options button to be visible and in correct position  
-	if self.page1.button_options then
-		self.page1.button_options:SetFrameLevel(self.page1:GetFrameLevel() + 5)
-		self.page1.button_options:Show()
-	end
+	-- Create buttons programmatically since XML-defined ones weren't showing
+	-- Bind spell button
+	self.page1.button_spell = CreateFrame("Button", nil, self.page1, "UIPanelButtonTemplate")
+	self.page1.button_spell:SetSize(70, 22)
+	self.page1.button_spell:SetPoint("TOPLEFT", self.page1.profileDropdown, "TOPRIGHT", -15, -2)
+	self.page1.button_spell:SetText(L["Bind spell"])
+	self.page1.button_spell:SetScript("OnClick", function(button) self:Button_OnClick(button) end)
+	self.page1.button_spell:Show()
 
-	-- Force other button to be visible and in correct position  
-	if self.page1.button_other then
-		self.page1.button_other:SetFrameLevel(self.page1:GetFrameLevel() + 5)
-		self.page1.button_other:Show()
-	end
+	-- Bind other button
+	self.page1.button_other = CreateFrame("Button", nil, self.page1, "UIPanelButtonTemplate")
+	self.page1.button_other:SetSize(70, 22)
+	self.page1.button_other:SetPoint("LEFT", self.page1.button_spell, "RIGHT", 0, 0)
+	self.page1.button_other:SetText(L["Bind other"])
+	self.page1.button_other:SetScript("OnClick", function(button) self:Button_OnClick(button) end)
+	self.page1.button_other:Show()
 
-	-- Force spell button to be visible and in correct position  
-	if self.page1.button_spell then
-		self.page1.button_spell:SetFrameLevel(self.page1:GetFrameLevel() + 5)
-		self.page1.button_spell:Show()
-	end
+	-- Options button
+	self.page1.button_options = CreateFrame("Button", nil, self.page1, "UIPanelButtonTemplate")
+	self.page1.button_options:SetSize(70, 22)
+	self.page1.button_options:SetPoint("LEFT", self.page1.button_other, "RIGHT", 0, 0)
+	self.page1.button_options:SetText(L["Options"])
+	self.page1.button_options:SetScript("OnClick", function(button) self:Button_OnClick(button) end)
+	self.page1.button_options:Show()
+end
+
+function CliqueConfig:CreatePage2Buttons()
+	-- Set binding button is working fine from XML, only create Save and Cancel buttons
+
+	-- Create Save button in bottom left corner
+	self.page2.button_save = CreateFrame("Button", nil, self.page2, "UIPanelButtonTemplate")
+	self.page2.button_save:SetSize(90, 22)
+	self.page2.button_save:SetPoint("BOTTOMLEFT", self.page2, "BOTTOMLEFT", 0, -22)
+	self.page2.button_save:SetText(L["Save"])
+	self.page2.button_save:SetScript("OnClick", function(button) self:Button_OnClick(button) end)
+	self.page2.button_save:SetFrameLevel(self.page2:GetFrameLevel() + 10)
+	self.page2.button_save:Disable() -- Start disabled
+	self.page2.button_save:Show()
+
+	-- Create Cancel button in bottom right corner
+	self.page2.button_cancel = CreateFrame("Button", nil, self.page2, "UIPanelButtonTemplate")
+	self.page2.button_cancel:SetSize(90, 22)
+	self.page2.button_cancel:SetPoint("BOTTOMRIGHT", self.page2, "BOTTOMRIGHT", 0, -22)
+	self.page2.button_cancel:SetText(L["Cancel"])
+	self.page2.button_cancel:SetScript("OnClick", function(button) self:Button_OnClick(button) end)
+	self.page2.button_cancel:SetFrameLevel(self.page2:GetFrameLevel() + 10)
+	self.page2.button_cancel:Show()
 end
 
 function CliqueConfig:Column_OnClick(frame, button)

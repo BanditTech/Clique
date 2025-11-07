@@ -355,39 +355,6 @@
                             <Size x="24" y="24"/>
                         </ThumbTexture>
                     </Slider>
-                    <Button name="$parentButtonSpell" parentKey="button_spell" inherits="MagicButtonTemplate">
-                        <Size x="100" y="22"/>
-                        <Anchors>
-                            <Anchor point="BOTTOMLEFT" relativeTo="CliqueConfig"/>
-                        </Anchors>
-                        <Scripts>
-                            <OnClick>
-                                CliqueConfig:Button_OnClick(self)
-                            </OnClick>
-                        </Scripts>
-                    </Button>
-                    <Button name="$parentButtonOther" parentKey="button_other" inherits="MagicButtonTemplate">
-                        <Size x="100" y="22"/>
-                        <Anchors>
-                            <Anchor point="TOPLEFT" relativeTo="$parentButtonSpell" relativePoint="TOPRIGHT"/>
-                        </Anchors>
-                        <Scripts>
-                            <OnClick>
-                                CliqueConfig:Button_OnClick(self)
-                            </OnClick>
-                        </Scripts>
-                    </Button>
-                    <Button name="$parentButtonOptions" parentKey="button_options" inherits="MagicButtonTemplate">
-                        <Size x="80" y="22"/>
-                        <Anchors>
-                            <Anchor point="BOTTOMRIGHT" relativeTo="CliqueConfig"/>
-                        </Anchors>
-                        <Scripts>
-                            <OnClick>
-                                CliqueConfig:Button_OnClick(self)
-                            </OnClick>
-                        </Scripts>
-                    </Button>
                 </Frames>
                 <Scripts>
                     <OnShow>
