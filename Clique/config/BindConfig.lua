@@ -34,6 +34,8 @@ function CliqueConfig:OnShow()
 
 	CliqueSpellTab:SetChecked(true)
 	self:UpdateList()
+	self:UpdateProfileDisplay()
+	UIDropDownMenu_Refresh(self.page1.profileDropdown)
 	self:EnableSpellbookButtons()
 	self:UpdateAlert()
 end
@@ -104,7 +106,47 @@ function CliqueConfig:SetupGUI()
 	self.page2.desc:SetText(desc)
 	self.page2.editbox = CliqueScrollFrameEditBox
 
+	-- Create profile UI elements programmatically
+	self:CreateProfileUI()
+
 	self.page1:Show()
+end
+
+function CliqueConfig:CreateProfileUI()
+	-- Create profile label with support for long names and multiple lines
+	self.page1.profileLabel = self.page1:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	self.page1.profileLabel:SetJustifyH("LEFT")
+	self.page1.profileLabel:SetJustifyV("TOP")
+	self.page1.profileLabel:SetSize(265, 24) -- Increased height for two lines
+	self.page1.profileLabel:SetPoint("TOPLEFT", self, "TOPLEFT", 60, -30)
+	self.page1.profileLabel:SetWordWrap(true) -- Enable word wrapping
+	self.page1.profileLabel:SetText(L["Current Profile: "])
+
+	-- Create profile dropdown in bottom left corner
+	self.page1.profileDropdown = CreateFrame("Frame", "CliqueConfigProfileDropdown", self.page1, "UIDropDownMenuTemplate")
+	self.page1.profileDropdown:SetPoint("BOTTOMLEFT", self, "BOTTOMLEFT", -15, -2)
+	self.page1.profileDropdown:SetFrameLevel(self.page1:GetFrameLevel() + 10) -- Ensure dropdown is on top
+	UIDropDownMenu_SetWidth(self.page1.profileDropdown, 100)
+	UIDropDownMenu_Initialize(self.page1.profileDropdown, function(dropdown, level) self:ProfileDropdown_Initialize(dropdown, level) end)
+
+	-- Make sure existing buttons are properly positioned and visible
+	-- Force options button to be visible and in correct position  
+	if self.page1.button_options then
+		self.page1.button_options:SetFrameLevel(self.page1:GetFrameLevel() + 5)
+		self.page1.button_options:Show()
+	end
+
+	-- Force other button to be visible and in correct position  
+	if self.page1.button_other then
+		self.page1.button_other:SetFrameLevel(self.page1:GetFrameLevel() + 5)
+		self.page1.button_other:Show()
+	end
+
+	-- Force spell button to be visible and in correct position  
+	if self.page1.button_spell then
+		self.page1.button_spell:SetFrameLevel(self.page1:GetFrameLevel() + 5)
+		self.page1.button_spell:Show()
+	end
 end
 
 function CliqueConfig:Column_OnClick(frame, button)
@@ -183,6 +225,61 @@ function CliqueConfig:Spellbook_OnBinding(button, key)
 	CliqueConfig:UpdateList()
 end
 
+function CliqueConfig:UpdateProfileDisplay()
+	local currentProfile = addon.db:GetCurrentProfile()
+	local displayText = L["Current Profile: "] .. currentProfile
+
+	-- Check if spec swap is enabled
+	if addon.settings.specswap then
+		local currentSpec = addon.talentGroup or 1
+		displayText = displayText .. " " .. L["(Spec "] .. currentSpec .. ")"
+	else
+		displayText = displayText .. " " .. L["(All specs)"]
+	end
+
+	self.page1.profileLabel:SetText(displayText)
+
+	-- Update dropdown text
+	UIDropDownMenu_SetText(self.page1.profileDropdown, currentProfile)
+end
+
+function CliqueConfig:ProfileDropdown_Initialize(dropdown, level)
+	local profiles = addon.db:GetProfiles()
+	local currentProfile = addon.db:GetCurrentProfile()
+
+	-- Create sorted list of profiles
+	local sortedProfiles = {}
+	for idx, profileName in ipairs(profiles) do table.insert(sortedProfiles, profileName) end
+	table.sort(sortedProfiles)
+
+	-- Add each profile as a menu item
+	for _, profileName in ipairs(sortedProfiles) do
+		local info = UIDropDownMenu_CreateInfo()
+		info.text = profileName
+		info.value = profileName
+		info.func = function() self:ProfileDropdown_OnClick(profileName) end
+		info.checked = (profileName == currentProfile)
+		UIDropDownMenu_AddButton(info, level)
+	end
+end
+
+function CliqueConfig:ProfileDropdown_OnClick(profileName)
+	if addon.settings.specswap then
+		-- When spec swap is enabled, change the profile for the current specialization
+		local currentSpec = addon.talentGroup or 1
+		addon.settings["specswap" .. currentSpec] = profileName
+		-- Also switch to that profile immediately
+		addon.db:SetProfile(profileName)
+	else
+		-- When spec swap is disabled, just change the current profile
+		addon.db:SetProfile(profileName)
+	end
+
+	self:UpdateProfileDisplay()
+	self:UpdateList()
+	CloseDropDownMenus()
+end
+
 function CliqueConfig:Button_OnClick(button)
 	-- Click handler for "Bind spell" button
 	if button == self.page1.button_spell then
@@ -220,7 +317,7 @@ function CliqueConfig:Button_OnClick(button)
 		UIDropDownMenu_SetAnchor(self.dropdown, 0, 0, "BOTTOMLEFT", self.page1.button_other, "TOP")
 		EasyMenu(menu, self.dropdown, nil, 0, 0, "MENU", nil)
 
-		-- Click handler for "Edit" button
+		-- Click handler for "Options" button
 	elseif button == self.page1.button_options then
 		local menu = {{
 			text = L["Select an options category"],
