@@ -20,11 +20,13 @@ function addon:IntegrateBlizzardFrames()
 	self:Wrath_BlizzPartyFrames()
 	self:Wrath_BlizzBossFrames()
 
-	if IsAddOnLoaded("CompactRaidFrame") then
+	-- Check for both standard CompactRaidFrame and Ascension version
+	if IsAddOnLoaded("CompactRaidFrame") or IsAddOnLoaded("Ascension_CompactRaidFrames") then
 		self:Wrath_BlizzCompactUnitFrames()
 	else
 		waitForAddon = CreateFrame("Frame")
 		waitForAddon["CompactRaidFrame"] = "Wrath_BlizzCompactUnitFrames"
+		waitForAddon["Ascension_CompactRaidFrames"] = "Wrath_BlizzCompactUnitFrames"
 	end
 
 	if waitForAddon then
@@ -41,17 +43,11 @@ end
 function addon:Wrath_BlizzCompactUnitFrames()
 	if not addon.settings.blizzframes.compactraid then return end
 
-	hooksecurefunc("CompactUnitFrame_SetUpFrame", function(frame, ...)
-		--[[for i = 1, 3 do
-            local buffFrame = frame.BuffFrame
+	-- For standard CompactRaidFrame addon
+	if CompactUnitFrame_SetUpFrame then hooksecurefunc("CompactUnitFrame_SetUpFrame", function(frame, ...) addon:RegisterBlizzardFrame(frame) end) end
 
-            if buffFrame then
-                addon:RegisterBlizzardFrame(buffFrame)
-            end
-        end]]
-
-		addon:RegisterBlizzardFrame(frame)
-	end)
+	-- For Ascension CompactRaidFrames addon
+	if CompactUnitMixin then hooksecurefunc(CompactUnitMixin, "SetUpFrame", function(frame, ...) addon:RegisterBlizzardFrame(frame) end) end
 end
 
 function addon:Wrath_BlizzSelfFrames()

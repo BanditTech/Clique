@@ -13,8 +13,8 @@ local MAX_ROWS = 12
 
 function CliqueConfig:ShowWithSpellBook()
 	self:ClearAllPoints()
-	self:SetParent(SpellBookFrame)
-	self:SetPoint("LEFT", SpellBookFrame, "RIGHT", 55, 0)
+	self:SetParent(AscensionSpellbookFrame)
+	self:SetPoint("LEFT", AscensionSpellbookFrame, "RIGHT", 55, 0)
 	self:Show()
 end
 
@@ -26,7 +26,7 @@ function CliqueConfig:OnShow()
 	end
 
 	-- Hide the alertTab if the spellbook isn't shown
-	if SpellButton1:IsVisible() then
+	if AscensionSpellbookFrameContentSpellsSpellButton1:IsVisible() then
 		self.bindAlert:Show()
 	else
 		self.bindAlert:Hide()
@@ -116,7 +116,7 @@ function CliqueConfig:HijackSpellbook()
 	self.spellbookButtons = {}
 
 	for idx = 1, 12 do
-		local parent = _G["SpellButton" .. idx]
+		local parent = _G["AscensionSpellbookFrameContentSpellsSpellButton" .. idx]
 		local button = CreateFrame("Button", "CliqueSpellbookButton" .. idx, parent, "CliqueSpellbookButtonTemplate")
 		button.spellbutton = parent
 		button:EnableKeyboard(false)
@@ -126,8 +126,8 @@ function CliqueConfig:HijackSpellbook()
 		self.spellbookButtons[idx] = button
 	end
 
-	SpellBookFrame:HookScript("OnShow", function(frame) self:EnableSpellbookButtons() end)
-	SpellBookFrame:HookScript("OnHide", function(frame) self:EnableSpellbookButtons() end)
+	AscensionSpellbookFrame:HookScript("OnShow", function(frame) self:EnableSpellbookButtons() end)
+	AscensionSpellbookFrame:HookScript("OnHide", function(frame) self:EnableSpellbookButtons() end)
 
 	self:EnableSpellbookButtons()
 end
@@ -135,7 +135,7 @@ end
 function CliqueConfig:EnableSpellbookButtons()
 	local enabled;
 
-	if self.page1:IsVisible() and SpellBookFrame:IsVisible() then enabled = true end
+	if self.page1:IsVisible() and AscensionSpellbookFrame:IsVisible() then enabled = true end
 
 	if self.spellbookButtons then
 		for idx, button in ipairs(self.spellbookButtons) do
@@ -159,11 +159,15 @@ function CliqueConfig:Spellbook_OnBinding(button, key)
 		return
 	end
 
-	local slot = SpellBook_GetSpellID(button:GetParent():GetID())
-	local name, spellSubName, subtype = GetSpellName(slot, SpellBookFrame.bookType)
-	local texture = GetSpellTexture(slot, SpellBookFrame.bookType)
-
-	if spellSubName == "" then spellSubName = nil end
+	local name = getglobal(button.spellbutton:GetName() .. "SpellName"):GetText()
+	local spellSubName = getglobal(button.spellbutton:GetName() .. "SubSpellName"):GetText()
+	local texture = getglobal(button.spellbutton:GetName() .. "IconTexture"):GetTexture()
+	-- Only enable spellSubName if ShowAllSpellRanks is checked
+	if not AscensionSpellbookFrameContentSpellsShowAllSpellRanks:GetChecked() then
+		spellSubName = nil
+	elseif spellSubName == "" then
+		spellSubName = nil
+	end
 
 	local key = addon:GetCapturedKey(key)
 	if not key then return end
@@ -182,7 +186,7 @@ end
 function CliqueConfig:Button_OnClick(button)
 	-- Click handler for "Bind spell" button
 	if button == self.page1.button_spell then
-		ShowUIPanel(SpellBookFrame)
+		ShowUIPanel(AscensionSpellbookFrame)
 		CliqueConfig:ShowWithSpellBook()
 
 		-- Click handler for "Bind other" button
@@ -225,7 +229,7 @@ function CliqueConfig:Button_OnClick(button)
 		}, {
 			text = L["Clique general options"],
 			func = function()
-				HideUIPanel(SpellBookFrame)
+				HideUIPanel(AscensionSpellbookFrame)
 				HideUIPanel(CliqueConfig)
 				InterfaceOptionsFrame_OpenToCategory(addon.optpanels["GENERAL"])
 			end,
@@ -233,7 +237,7 @@ function CliqueConfig:Button_OnClick(button)
 		}, {
 			text = L["Frame blacklist"],
 			func = function()
-				HideUIPanel(SpellBookFrame)
+				HideUIPanel(AscensionSpellbookFrame)
 				HideUIPanel(CliqueConfig)
 				InterfaceOptionsFrame_OpenToCategory(addon.optpanels["BLACKLIST"])
 			end,
@@ -241,7 +245,7 @@ function CliqueConfig:Button_OnClick(button)
 		}, {
 			text = L["Blizzard frame integration options"],
 			func = function()
-				HideUIPanel(SpellBookFrame)
+				HideUIPanel(AscensionSpellbookFrame)
 				HideUIPanel(CliqueConfig)
 				InterfaceOptionsFrame_OpenToCategory(addon.optpanels["BLIZZFRAMES"])
 			end,
@@ -609,7 +613,7 @@ end
 function CliqueConfig:SpellTab_OnClick(frame)
 	if self:IsVisible() then
 		HideUIPanel(CliqueConfig)
-	elseif SpellBookFrame:IsVisible() then
+	elseif AscensionSpellbookFrame:IsVisible() then
 		self:ShowWithSpellBook()
 	else
 		ShowUIPanel(CliqueConfig)
@@ -618,7 +622,7 @@ end
 
 function CliqueConfig:UpdateAlert(type)
 	local alert = CliqueTabAlert
-	if not addon.settings.alerthidden and SpellBookFrame:IsVisible() and CliqueConfig:IsVisible() then
+	if not addon.settings.alerthidden and AscensionSpellbookFrame:IsVisible() and CliqueConfig:IsVisible() then
 		alert.type = type
 		alert.text:SetText(
 			L["When both the Clique binding configuration window and the spellbook are open, you can set new bindings simply by performing them on the spell icon in your spellbook. Simply move your mouse over a spell and then click or press a key on your keyboard along with any combination of the alt, control, and shift keys. The new binding will be added to your binding configuration."])

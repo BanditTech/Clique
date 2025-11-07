@@ -4,19 +4,12 @@
 ## Version: 1.6
 ## Notes: Simply powerful click-casting interface
 ## SavedVariables: CliqueDB, CliqueDB3
-## RequiredDeps: !!!ClassicAPI
 
 AddonCore.lua
 i18n\Localization.enUS.lua
 i18n\Localization.ruRU.lua
 i18n\Localization.zhCN.lua
 i18n\Localization.zhTW.lua
-
-libs\LibStub\LibStub.lua
-libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
-libs\AceDB-3.0\AceDB-3.0.xml
-libs\LibDeflate\LibDeflate.lua
-libs\LibSerialize\LibSerialize.lua
 
 DatabaseDefaults.lua
 ClickCastTemplate.xml

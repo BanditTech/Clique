@@ -111,7 +111,7 @@ end
 
 local function make_label(name, parent, template)
 	local label = parent:CreateFontString("OVERLAY", name, template)
-	label:SetWidth(parent:GetWidth())
+	label:SetWidth(110)
 	label:SetJustifyH("LEFT")
 	label.type = "label"
 	return label
@@ -175,26 +175,20 @@ function panel:CreateOptions()
 	self.specswap.text:SetText(L["Swap profiles based on talent spec"])
 	self.specswap.EnableDisable = function()
 		if self.specswap:GetChecked() then
-			UIDropDownMenu_EnableDropDown(panel.prispec)
-			UIDropDownMenu_EnableDropDown(panel.secspec)
+			for i = 1, 12 do UIDropDownMenu_EnableDropDown(panel["specswap" .. i]) end
 		else
-			UIDropDownMenu_DisableDropDown(panel.prispec)
-			UIDropDownMenu_DisableDropDown(panel.secspec)
+			for i = 1, 12 do UIDropDownMenu_DisableDropDown(panel["specswap" .. i]) end
 		end
 	end
 	self.specswap:SetScript("PostClick", self.specswap.EnableDisable)
 
-	self.prispeclabel = make_label("CliqueOptionsPriSpecLabel", self, "GameFontNormalSmall")
-	self.prispeclabel:SetText(L["Primary talent spec profile:"])
-	self.prispec = make_dropdown("CliqueOptionsPriSpec", self)
-	UIDropDownMenu_SetWidth(self.prispec, 200)
-	BlizzardOptionsPanel_SetupDependentControl(self.specswap, self.prispec)
-
-	self.secspeclabel = make_label("CliqueOptionsSecSpecLabel", self, "GameFontNormalSmall")
-	self.secspeclabel:SetText(L["Secondary talent spec profile:"])
-	self.secspec = make_dropdown("CliqueOptionsSecSpec", self)
-	UIDropDownMenu_SetWidth(self.secspec, 200)
-	BlizzardOptionsPanel_SetupDependentControl(self.specswap, self.secspec)
+	for i = 1, 12 do
+		self["specswap" .. i .. "label"] = make_label("CliqueOptionsSpecSwap" .. i .. "Label", self, "GameFontNormalSmall")
+		self["specswap" .. i .. "label"]:SetText(L["Specialization Slot "] .. i .. L[":"])
+		self["specswap" .. i] = make_dropdown("CliqueOptionsSpecSwap" .. i, self)
+		UIDropDownMenu_SetWidth(self["specswap" .. i], 200)
+		BlizzardOptionsPanel_SetupDependentControl(self.specswap, self["specswap" .. i])
+	end
 
 	self.profilelabel = make_label("CliqueOptionsProfileMgmtLabel", self, "GameFontNormalSmall")
 	self.profilelabel:SetText(L["Profile Management:"])
@@ -254,24 +248,28 @@ function panel:CreateOptions()
 	table.insert(bits, self.fastooc)
 	table.insert(bits, self.stopcastingfix)
 	table.insert(bits, self.specswap)
-	table.insert(bits, self.prispeclabel)
-	table.insert(bits, self.prispec)
-	table.insert(bits, self.secspeclabel)
-	table.insert(bits, self.secspec)
 	table.insert(bits, self.profilelabel)
 	table.insert(bits, self.profiledd)
 	table.insert(bits, self.exportbindingslabel)
 	table.insert(bits, self.exportbindingseditbox)
 	table.insert(bits, self.importbindingslabel)
 	table.insert(bits, self.importbindingseditbox)
+	for i = 1, 12 do
+		table.insert(bits, self["specswap" .. i .. "label"])
+		table.insert(bits, self["specswap" .. i])
+	end
 
 	bits[1]:SetPoint("TOPLEFT", 5, -5)
 
+	local bump = 1
 	for i = 2, #bits, 1 do
 		if bits[i].type == "label" then
-			bits[i]:SetPoint("TOPLEFT", bits[i - 1], "BOTTOMLEFT", 5, -5)
+			bits[i]:SetPoint("TOPLEFT", bits[i - bump], "BOTTOMLEFT", 0, -15)
+			if bump == 1 then bump = 2 end
 		elseif bits[i].type == "dropdown" then
-			bits[i]:SetPoint("TOPLEFT", bits[i - 1], "BOTTOMLEFT", -5, -5)
+			bits[i]:SetPoint("LEFT", bits[i - 1], "RIGHT", 5, -5)
+		elseif bits[i].type == "editbox" then
+			bits[i]:SetPoint("LEFT", bits[i - 1], "RIGHT", 5, 0)
 		else
 			bits[i]:SetPoint("TOPLEFT", bits[i - 1], "BOTTOMLEFT", 0, -5)
 		end
@@ -482,7 +480,9 @@ local function mgmt_initialize(dropdown, level)
 		local info = UIDropDownMenu_CreateInfo()
 		info.text = L["Select profile: %s"]:format(UIDROPDOWNMENU_MENU_VALUE)
 		info.value = sort[UIDROPDOWNMENU_MENU_VALUE]
-		info.disabled = addon.settings.specswap
+		-- info.disabled = addon.settings.specswap
+		info.disabled = UIDROPDOWNMENU_MENU_VALUE == currentProfile
+
 		info.func = function(frame)
 			UIDropDownMenu_SetSelectedValue(dropdown, UIDROPDOWNMENU_MENU_VALUE)
 			UIDropDownMenu_SetText(dropdown, UIDROPDOWNMENU_MENU_VALUE)
@@ -511,17 +511,15 @@ function panel.refresh()
 	local settings = addon.settings
 	local currentProfile = addon.db:GetCurrentProfile()
 
-	UIDropDownMenu_Initialize(panel.prispec, spec_initialize)
-	UIDropDownMenu_SetSelectedValue(panel.prispec, settings.pri_profileKey or currentProfile)
-	UIDropDownMenu_SetText(panel.prispec, settings.pri_profileKey or currentProfile)
-
-	UIDropDownMenu_Initialize(panel.secspec, spec_initialize)
-	UIDropDownMenu_SetSelectedValue(panel.secspec, settings.sec_profileKey or currentProfile)
-	UIDropDownMenu_SetText(panel.secspec, settings.sec_profileKey or currentProfile)
-
 	UIDropDownMenu_Initialize(panel.profiledd, mgmt_initialize)
 	UIDropDownMenu_SetSelectedValue(panel.profiledd, currentProfile)
 	UIDropDownMenu_SetText(panel.profiledd, L["Current: "] .. currentProfile)
+
+	for i = 1, 12 do
+		UIDropDownMenu_Initialize(panel["specswap" .. i], spec_initialize)
+		UIDropDownMenu_SetSelectedValue(panel["specswap" .. i], settings["specswap" .. i] or currentProfile)
+		UIDropDownMenu_SetText(panel["specswap" .. i], settings["specswap" .. i] or currentProfile)
+	end
 
 	panel.updown:SetChecked(settings.downclick)
 	panel.fastooc:SetChecked(settings.fastooc)
@@ -541,8 +539,7 @@ function panel.okay()
 	settings.stopcastingfix = not not panel.stopcastingfix:GetChecked()
 	settings.fastooc = not not panel.fastooc:GetChecked()
 	settings.specswap = not not panel.specswap:GetChecked()
-	settings.pri_profileKey = UIDropDownMenu_GetSelectedValue(panel.prispec)
-	settings.sec_profileKey = UIDropDownMenu_GetSelectedValue(panel.secspec)
+	for i = 1, 12 do settings["specswap" .. i] = UIDropDownMenu_GetSelectedValue(panel["specswap" .. i]) end
 
 	if newProfile ~= currentProfile then addon.db:SetProfile(newProfile) end
 	addon:UpdateCombatWatch()

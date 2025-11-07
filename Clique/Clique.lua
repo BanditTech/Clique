@@ -696,18 +696,13 @@ function addon:ApplyAttributes()
 end
 
 function addon:TalentGroupChanged()
-	self.talentGroup = GetActiveTalentGroup()
+	self.talentGroup = SpecializationUtil.GetActiveSpecialization()
 
 	if self.settings.specswap then
 		local currentProfile = self.db:GetCurrentProfile()
 		local newProfile
 
-		-- Determine which profile to set, based on talent group
-		if self.talentGroup == 1 and self.settings.pri_profileKey then
-			newProfile = self.settings.pri_profileKey
-		elseif self.talentGroup == 2 and self.settings.sec_profileKey then
-			newProfile = self.settings.sec_profileKey
-		end
+		if self.settings["specswap" .. self.talentGroup] then newProfile = self.settings["specswap" .. self.talentGroup] end
 
 		if newProfile ~= currentProfile and type(newProfile) == "string" then self.db:SetProfile(newProfile) end
 	end
@@ -742,7 +737,7 @@ function addon:PlayerEnteringWorld()
 	addon:UpdateCombatWatch()
 
 	-- Support mutliple talent specs on release
-	self:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED", "TalentGroupChanged")
+	self:RegisterEvent("ASCENSION_CA_SPECIALIZATION_ACTIVE_ID_CHANGED", "TalentGroupChanged")
 	addon:TalentGroupChanged()
 
 	self:FireMessage("BLACKLIST_CHANGED")
@@ -947,7 +942,7 @@ end
 
 SLASH_CLIQUE1 = "/clique"
 SlashCmdList["CLIQUE"] = function(msg, editbox)
-	if SpellBookFrame:IsVisible() then
+	if AscensionSpellbookFrame:IsVisible() then
 		CliqueConfig:ShowWithSpellBook()
 	else
 		ShowUIPanel(CliqueConfig)

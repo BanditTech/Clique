@@ -117,7 +117,7 @@
         <HighlightTexture file="Interface\BUTTONS\ButtonHilight-Square" alphaMode="ADD"/>
     </Button>
 
-    <CheckButton name="CliqueSpellTab" inherits="SpellBookSkillLineTabTemplate" parent="SpellBookSkillLineTab1" hidden="false">
+    <CheckButton name="CliqueSpellTab" inherits="SpellBookSkillLineTabTemplate" parent="AscensionSpellbookFrameSideBarTab1" hidden="false">
         <Scripts>
             <OnClick>
                 CliqueConfig:SpellTab_OnClick()
@@ -129,14 +129,14 @@
 
                 local num = GetNumSpellTabs()
                 self:ClearAllPoints()
-                local lastTab = _G["SpellBookSkillLineTab" .. num]
+                local lastTab = _G["AscensionSpellbookFrameSideBarTab" .. num]
                 self:SetPoint("TOPLEFT", lastTab, "BOTTOMLEFT", 0, -17)
             </OnShow>
         </Scripts>
         <NormalTexture file="Interface\AddOns\Clique\images\icon_square_64"/>
     </CheckButton>
 
-    <Frame name="CliqueTabAlert" parentKey="alert" inherits="GlowBoxTemplate" parent="SpellBookFrame" enableMouse="true" hidden="true" frameStrata="DIALOG" framelevel="2">
+    <Frame name="CliqueTabAlert" parentKey="alert" inherits="GlowBoxTemplate" parent="AscensionSpellbookFrame" enableMouse="true" hidden="true" frameStrata="DIALOG" framelevel="2">
         <Size x="220" y="100"/>
         <Anchors>
             <Anchor point="LEFT" relativeTo="CliqueSpellTab" relativePoint="RIGHT" x="20" y="0"/>
@@ -545,7 +545,7 @@
             <Frame name="CliqueConfigBindAlert" parentKey="bindAlert" inherits="GlowBoxTemplate" hidden="false" frameStrata="DIALOG" framelevel="2">
                 <Size x="235" y="43"/>
                 <Anchors>
-                    <Anchor point="BOTTOMLEFT" relativeTo="SpellButton1" relativePoint="TOP" x="-40" y="25"/>
+                    <Anchor point="BOTTOMLEFT" relativeTo="AscensionSpellbookFrameContentSpellsSpellButton1" relativePoint="TOP" x="-40" y="25"/>
                 </Anchors>
                 <Layers>
                     <Layer level="OVERLAY">
